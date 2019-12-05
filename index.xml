@@ -6,7 +6,7 @@
     <description>Recent content on 郑泽鹏 - 个人博客</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>zh-cn</language>
-    <lastBuildDate>Thu, 05 Dec 2019 16:20:07 +0800</lastBuildDate>
+    <lastBuildDate>Thu, 05 Dec 2019 16:36:58 +0800</lastBuildDate>
     
 	<atom:link href="https://zhengzepeng.github.io/index.xml" rel="self" type="application/rss+xml" />
     
@@ -14,10 +14,10 @@
     <item>
       <title>First</title>
       <link>https://zhengzepeng.github.io/post/first/</link>
-      <pubDate>Thu, 05 Dec 2019 16:20:07 +0800</pubDate>
+      <pubDate>Thu, 05 Dec 2019 16:36:58 +0800</pubDate>
       
       <guid>https://zhengzepeng.github.io/post/first/</guid>
-      <description>这是测试文章</description>
+      <description>测试文章</description>
     </item>
     
   </channel>
