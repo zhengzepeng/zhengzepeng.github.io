@@ -3,15 +3,26 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   
   <url>
+    <loc>https://zhengzepeng.github.io/post/first/</loc>
+    <lastmod>2019-12-05T16:20:07+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://zhengzepeng.github.io/post/</loc>
+    <lastmod>2019-12-05T16:20:07+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://zhengzepeng.github.io/</loc>
+    <lastmod>2019-12-05T16:20:07+08:00</lastmod>
+  </url>
+  
+  <url>
     <loc>https://zhengzepeng.github.io/categories/</loc>
   </url>
   
   <url>
     <loc>https://zhengzepeng.github.io/tags/</loc>
-  </url>
-  
-  <url>
-    <loc>https://zhengzepeng.github.io/</loc>
   </url>
   
 </urlset>
