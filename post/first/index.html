@@ -37,6 +37,7 @@
     
 </head>
 
+
 <body>
 <header id="header" class="clearfix">
     <div class="container">
@@ -51,7 +52,7 @@
             </div>
             <div>
                 <nav id="nav-menu" class="clearfix">
-                    <a class="current" href="https://zhengzepeng.github.io/">首页</a>
+                    <a class="" href="https://zhengzepeng.github.io/">首页</a>
                     
                 </nav>
             </div>
@@ -61,47 +62,16 @@
 
 
 <div id="body">
-        
-        
     <div class="container">
         <div class="col-group">
 
             <div class="col-8" id="main">
-                <div class="res-cons">
-                    <article class="post">
-                        <header>
-                            <h1 class="post-title">First</h1>
-                        </header>
-                        <date class="post-meta meta-date">
-                            2019年12月5日
-                        </date>
-                        
-                        
-                        
-                        <div class="post-content">
-                            <p>测试文章 这是我的测试文章啊</p>
-
-                        </div>
-
-                        
-
-
-                        
-
-
-                        <div class="post-meta meta-tags">
-                            
-                            没有标签
-                            
-                        </div>
-                    </article>
+                <div class="post-archive">
                     
-    
 
-    
-    
                 </div>
             </div>
+
             <div id="secondary">
     <section class="widget">
         <form id="search" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
@@ -115,10 +85,6 @@
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
-    
-    <li>
-        <a href="https://zhengzepeng.github.io/post/first/" title="First">First</a>
-    </li>
     
 </ul>
     </section>
@@ -198,83 +164,6 @@ if (!doNotTrack) {
 
 
 
-<script type="text/javascript">
-(function(){
-	if (typeof self === 'undefined' || !self.Prism || !self.document) {
-		return;
-	}
 
-	if (!Prism.plugins.toolbar) {
-		console.warn('Copy to Clipboard plugin loaded before Toolbar plugin.');
-
-		return;
-	}
-
-	var ClipboardJS = window.ClipboardJS || undefined;
-
-	if (!ClipboardJS && typeof require === 'function') {
-		ClipboardJS = require('clipboard');
-	}
-
-	var callbacks = [];
-
-	if (!ClipboardJS) {
-		var script = document.createElement('script');
-		var head = document.querySelector('head');
-
-		script.onload = function() {
-			ClipboardJS = window.ClipboardJS;
-
-			if (ClipboardJS) {
-				while (callbacks.length) {
-					callbacks.pop()();
-				}
-			}
-		};
-
-		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js';
-		head.appendChild(script);
-	}
-
-	Prism.plugins.toolbar.registerButton('copy-to-clipboard', function (env) {
-		var linkCopy = document.createElement('button');
-		linkCopy.textContent = '复制代码';
-
-		if (!ClipboardJS) {
-			callbacks.push(registerClipboard);
-		} else {
-			registerClipboard();
-		}
-
-		return linkCopy;
-
-		function registerClipboard() {
-			var clip = new ClipboardJS(linkCopy, {
-				'text': function () {
-					return env.code;
-				}
-			});
-
-			clip.on('success', function() {
-				linkCopy.textContent = '复制成功!';
-
-				resetText();
-			});
-			clip.on('error', function () {
-				linkCopy.textContent = '按 Ctrl+C 复制';
-
-				resetText();
-			});
-		}
-
-		function resetText() {
-			setTimeout(function () {
-				linkCopy.textContent = '复制代码';
-			}, 5000);
-		}
-	});
-})();
-
-</script>
 </body>
 </html>
