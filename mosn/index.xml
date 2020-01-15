@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Mosns on 老郑 - 个人博客</title>
+    <link>https://zhengzepeng.github.io/mosn/</link>
+    <description>Recent content in Mosns on 老郑 - 个人博客</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>zh-cn</language>
+    <lastBuildDate>Thu, 05 Dec 2019 17:19:56 +0800</lastBuildDate>
+    
+	<atom:link href="https://zhengzepeng.github.io/mosn/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Sofa Mosn源码 -- xds解析</title>
+      <link>https://zhengzepeng.github.io/mosn/sofa-mosn%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-xds%E8%A7%A3%E6%9E%90/</link>
+      <pubDate>Thu, 05 Dec 2019 17:19:56 +0800</pubDate>
+      
+      <guid>https://zhengzepeng.github.io/mosn/sofa-mosn%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-xds%E8%A7%A3%E6%9E%90/</guid>
+      <description>xds简介 下面是istio1.1官方给出的架构图: 其中sofamosn就相当于Proxy,其跟应用一起运行于同个Pod上,充当数据面板的作用;我们知道Pilot是控制面板,Proxy会去向Pilot申请所谓的XDS数据,以便于其后续进行相关的服务治理的工作,所以sofamosn能</description>
+    </item>
+    
+    <item>
+      <title>Sofa Mosn源码 -- 开篇</title>
+      <link>https://zhengzepeng.github.io/mosn/sofa-mosn%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-%E5%BC%80%E7%AF%87/</link>
+      <pubDate>Thu, 05 Dec 2019 17:19:56 +0800</pubDate>
+      
+      <guid>https://zhengzepeng.github.io/mosn/sofa-mosn%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-%E5%BC%80%E7%AF%87/</guid>
+      <description>今年上半年大概了解了下Service Mesh整体的思想,以及目前相对较火的istio,很好奇istio到底是怎么做的,以及sidecar是怎么样配合着pilot进行工作的,所以自己调出了点时间看了下istio的源码以及sidecar的代码. 所以阅读这块文章,首先你要对istio整</description>
+    </item>
+    
+  </channel>
+</rss>

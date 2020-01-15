@@ -1,0 +1,1263 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+
+    <meta charset="utf-8">
+    <meta name="generator" content="Hugo 0.60.1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Pilot源码阅读--xDS解析 | 老郑 - 个人博客</title>
+    <meta property="og:title" content="Pilot源码阅读--xDS解析 - 老郑 - 个人博客">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content="2020-01-15T11:23:17&#43;08:00">
+        
+        
+    <meta property="article:modified_time" content="2020-01-15T11:23:17&#43;08:00">
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Pilot源码阅读--xDS解析">
+        
+    <meta name="author" content="老郑">
+    <meta property="og:url" content="https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-xDS%E8%A7%A3%E6%9E%90/">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    
+        <link rel="stylesheet" href="/css/prism.css">
+    
+    <link rel="stylesheet" href="/css/style.css">
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+
+
+    
+    
+</head>
+
+<body>
+<header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://zhengzepeng.github.io/">
+                        老郑 - 个人博客
+                    </a>
+                
+                <p class="description">看书,写代码</p>
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="" href="https://zhengzepeng.github.io/">首页</a>
+                    
+                    <a  href="https://zhengzepeng.github.io/archives/" title="归档">归档</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+
+<div id="body">
+        
+        
+    <div class="container">
+        <div class="col-group">
+
+            <div class="col-8" id="main">
+                <div class="res-cons">
+                    <article class="post">
+                        <header>
+                            <h1 class="post-title">Pilot源码阅读--xDS解析</h1>
+                        </header>
+                        <date class="post-meta meta-date">
+                            2020年1月15日
+                        </date>
+                        
+                        
+                        <div class="post-meta">
+                            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span> 阅读</span></span>
+                        </div>
+                        
+                        
+                        <div class="post-content">
+                            <h2 id="pilotxds">Pilot源码阅读&ndash;xDS解析</h2>
+<p>首先看下官网对于Pilot的介绍：</p>
+<p>Pilot 为 Envoy sidecar 提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。</p>
+<p>Pilot 将控制流量行为的高级路由规则转换为特定于环境的配置，并在运行时将它们传播到 sidecar。Pilot 将特定于平台的服务发现机制抽象出来，并将它们合成为任何符合 <a href="https://www.envoyproxy.io/docs/envoy/latest/api/api">Envoy API</a> 的 sidecar 都可以使用的标准格式。</p>
+<p>下图展示了平台适配器和 Envoy 代理如何交互。</p>
+<p><a href="https://preliminary.istio.io/zh/docs/ops/deployment/architecture/discovery.svg"><img src="https://preliminary.istio.io/zh/docs/ops/deployment/architecture/discovery.svg" alt="Service discovery"></a></p>
+<p>Service discovery</p>
+<ol>
+<li>平台启动一个服务的新实例，该实例通知其平台适配器。</li>
+<li>平台适配器使用 Pilot 抽象模型注册实例。</li>
+<li><strong>Pilot</strong> 将流量规则和配置派发给 Envoy 代理，来传达此次更改。</li>
+</ol>
+<p>这种松耦合允许 Istio 在 Kubernetes、Consul 或 Nomad 等多种环境中运行，同时维护相同的 operator 接口来进行流量管理。</p>
+<p>您可以使用 Istio 的<a href="https://preliminary.istio.io/zh/docs/concepts/traffic-management/#introducing-Istio-traffic-management">流量管理 API</a> 来指示 Pilot 优化 Envoy 配置，以便对服务网格中的流量进行更细粒度地控制。</p>
+<h3 id="xds">xDS介绍</h3>
+<p>上面介绍说了，Pilot为Envoy Sidecar提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。那么Pilot怎么为Envoy提供这些功能呢？其实理解起来跟简单，服务发现、流量管理等功能是有Envoy Sidecar去实现，但其实现的前提是要有相关的配置，而Pilot服务下发这些配置，而这些配置统称为xDS，其是一类发现服务的统称，包括下面几类：</p>
+<ul>
+<li>
+<p>CDS：Cluster Discovery Service</p>
+<p>​	Cluster发现服务，Pilot下发CDS，Envoy才能直到有多少服务（集群）</p>
+</li>
+<li>
+<p>EDS：Endpoint Discovery Service、</p>
+<p>​	Endpoint发现服务，Envoy只是有多少集群还不够，要让Envoy能够做类似负载均衡等功能，其还需要知道集群下有多少主机，而Pilot下发的EDS信息就包括这些信息。</p>
+</li>
+<li>
+<p>SDS：Secret Discovery Service</p>
+<p>​	Secret发现服务，用于动态下发证书。</p>
+</li>
+<li>
+<p>RDS：Route Discovery Service</p>
+<p>​	路由发现服务，用于后续的路由功能的。</p>
+</li>
+<li>
+<p>LDS：Listener Discovery Service</p>
+<p>​	Listener发现服务，这个可以说是最重要的配置，其指导整个流量处理的流程，一两句很难说清楚，最好研究下源码。</p>
+</li>
+</ul>
+<p>上面介绍的xDS中，Pilot下发的目前只有CDS、EDS、LDS、RDS，而SDS是有Citadel组件负责的。那么Pilot如何下发这些xDS呢？</p>
+<h3 id="grpc">GRPC</h3>
+<p>关于GRPC协议是什么这里不介绍，有需要的自己Google下。</p>
+<p>EnvoyProxy的<a href="https://github.com/envoyproxy/data-plane-api">data-plane-api</a>工程定义了一系列的proto文件，其中envoy/service/discovery/v2/ads.proto定义如下：</p>
+<pre><code>syntax = &quot;proto3&quot;;
+
+package envoy.service.discovery.v2;
+
+import &quot;envoy/api/v2/discovery.proto&quot;;
+
+option java_package = &quot;io.envoyproxy.envoy.service.discovery.v2&quot;;
+option java_outer_classname = &quot;AdsProto&quot;;
+option java_multiple_files = true;
+option java_generic_services = true;
+
+// [#not-implemented-hide:] Discovery services for endpoints, clusters, routes,
+// and listeners are retained in the package `envoy.api.v2` for backwards
+// compatibility with existing management servers. New development in discovery
+// services should proceed in the package `envoy.service.discovery.v2`.
+
+// See https://github.com/lyft/envoy-api#apis for a description of the role of
+// ADS and how it is intended to be used by a management server. ADS requests
+// have the same structure as their singleton xDS counterparts, but can
+// multiplex many resource types on a single stream. The type_url in the
+// DiscoveryRequest/DiscoveryResponse provides sufficient information to recover
+// the multiplexed singleton APIs at the Envoy instance and management server.
+service AggregatedDiscoveryService {
+  // This is a gRPC-only API.
+  rpc StreamAggregatedResources(stream api.v2.DiscoveryRequest)
+      returns (stream api.v2.DiscoveryResponse) {
+  }
+
+  rpc DeltaAggregatedResources(stream api.v2.DeltaDiscoveryRequest)
+      returns (stream api.v2.DeltaDiscoveryResponse) {
+  }
+}
+
+// [#not-implemented-hide:] Not configuration. Workaround c++ protobuf issue with importing
+// services: https://github.com/google/protobuf/issues/4221
+message AdsDummy {
+}
+</code></pre><p>其定义了Envoy获取xDS的接口，其中有StreamAggregatedResources和DeltaAggregatedResources两个接口，所以Pilot也实现了这两个接口，用于Envoy获取xDS。</p>
+<h3 id="pilot">pilot源码</h3>
+<h4 id="xds1">xDS接口实现</h4>
+<p>pilot工程中，pilot/pkg/proxy/envoy/v2/ads.go实现了上面说的接口，如下：</p>
+<pre><code>// StreamAggregatedResources implements the ADS interface.
+func (s *DiscoveryServer) StreamAggregatedResources(stream ads.AggregatedDiscoveryService_StreamAggregatedResourcesServer) error {
+	peerInfo, ok := peer.FromContext(stream.Context())
+	peerAddr := &quot;0.0.0.0&quot;
+	if ok {
+		peerAddr = peerInfo.Addr.String()
+	}
+
+	t0 := time.Now()
+
+	// first call - lazy loading, in tests. This should not happen if readiness
+	// check works, since it assumes ClearCache is called (and as such PushContext
+	// is initialized)
+	// InitContext returns immediately if the context was already initialized.
+	err := s.globalPushContext().InitContext(s.Env)
+	if err != nil {
+		// Error accessing the data - log and close, maybe a different pilot replica
+		// has more luck
+		adsLog.Warnf(&quot;Error reading config %v&quot;, err)
+		return err
+	}
+	con := newXdsConnection(peerAddr, stream)
+
+	// Do not call: defer close(con.pushChannel) !
+	// the push channel will be garbage collected when the connection is no longer used.
+	// Closing the channel can cause subtle race conditions with push. According to the spec:
+	// &quot;It's only necessary to close a channel when it is important to tell the receiving goroutines that all data
+	// have been sent.&quot;
+
+	// Reading from a stream is a blocking operation. Each connection needs to read
+	// discovery requests and wait for push commands on config change, so we add a
+	// go routine. If go grpc adds gochannel support for streams this will not be needed.
+	// This also detects close.
+	var receiveError error
+	reqChannel := make(chan *xdsapi.DiscoveryRequest, 1)
+	go receiveThread(con, reqChannel, &amp;receiveError)
+
+	node := &amp;core.Node{}
+	for {
+		// Block until either a request is received or a push is triggered.
+		select {
+		case discReq, ok := &lt;-reqChannel:
+			if !ok {
+				// Remote side closed connection.
+				return receiveError
+			}
+			// This should be only set for the first request. Guard with ID check regardless.
+			if discReq.Node != nil &amp;&amp; discReq.Node.Id != &quot;&quot; {
+				node = discReq.Node
+				err = s.initConnectionNode(discReq.Node, con)
+				if err != nil {
+					return err
+				}
+			}
+
+			switch discReq.TypeUrl {
+			case ClusterType:
+				......
+
+			case ListenerType:
+				......
+
+			case RouteType:
+				......
+
+			case EndpointType:
+				......
+
+			default:
+				adsLog.Warnf(&quot;ADS: Unknown watched resources %s&quot;, discReq.String())
+			}
+
+			con.mu.Lock()
+			if !con.added {
+				con.added = true
+				con.mu.Unlock()
+				s.addCon(con.ConID, con)
+				defer s.removeCon(con.ConID, con)
+			} else {
+				con.mu.Unlock()
+			}
+		case pushEv := &lt;-con.pushChannel:
+			// It is called when config changes.
+			// This is not optimized yet - we should detect what changed based on event and only
+			// push resources that need to be pushed.
+
+			// TODO: possible race condition: if a config change happens while the envoy
+			// was getting the initial config, between LDS and RDS, the push will miss the
+			// monitored 'routes'. Same for CDS/EDS interval.
+			// It is very tricky to handle due to the protocol - but the periodic push recovers
+			// from it.
+
+			err := s.pushConnection(con, pushEv)
+			pushEv.done()
+			if err != nil {
+				return nil
+			}
+
+		}
+	}
+}
+</code></pre><p>DeltaAggregatedResources接口暂时并没有实现。</p>
+<p>从上面的switch分支我们很明显的可以看出其对CDS、LDS、RDS、EDS的处理，当然具体的代码下面介绍，现在只是列出来大概的结构。</p>
+<h5 id="cds">CDS</h5>
+<p>我们先看下ads.go对应CDS分支处理的代码：</p>
+<pre><code>				if con.CDSWatch {
+					// Already received a cluster watch request, this is an ACK
+					if discReq.ErrorDetail != nil {
+						adsLog.Warnf(&quot;ADS:CDS: ACK ERROR %v %s (%s) %v&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.String())
+						errCode := codes.Code(discReq.ErrorDetail.Code)
+						incrementXDSRejects(cdsReject, node.Id, errCode.String())
+					} else if discReq.ResponseNonce != &quot;&quot; {
+						con.ClusterNonceAcked = discReq.ResponseNonce
+					}
+					adsLog.Debugf(&quot;ADS:CDS: ACK %s %s (%s) %s %s&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.VersionInfo, discReq.ResponseNonce)
+					continue
+				}
+				// CDS REQ is the first request an envoy makes. This shows up
+				// immediately after connect. It is followed by EDS REQ as
+				// soon as the CDS push is returned.
+				adsLog.Infof(&quot;ADS:CDS: REQ %v %s %v version:%s&quot;, peerAddr, con.ConID, time.Since(t0), discReq.VersionInfo)
+				con.CDSWatch = true
+				err := s.pushCds(con, s.globalPushContext(), versionInfo())
+				if err != nil {
+					return err
+				}
+</code></pre><p>其中，s.pushCds会计算资源并将资源发给Envoy SideCar。CDS计算资源最终会走到pilot/pkg/networking/core/v1alpha3/cluster.go的BuildClusters方法，如下：</p>
+<pre><code>func (configgen *ConfigGeneratorImpl) BuildClusters(env *model.Environment, proxy *model.Proxy, push *model.PushContext) []*apiv2.Cluster {
+	clusters := make([]*apiv2.Cluster, 0)
+	instances := proxy.ServiceInstances
+
+	outboundClusters := configgen.buildOutboundClusters(env, proxy, push)
+
+	......
+}
+</code></pre><p>我们关注下buildOutboundClusters方法：</p>
+<pre><code>func (configgen *ConfigGeneratorImpl) buildOutboundClusters(env *model.Environment, proxy *model.Proxy, push *model.PushContext) []*apiv2.Cluster {
+	clusters := make([]*apiv2.Cluster, 0)
+
+	inputParams := &amp;plugin.InputParams{
+		Env:  env,
+		Push: push,
+		Node: proxy,
+	}
+	networkView := model.GetNetworkView(proxy)
+
+	for _, service := range push.Services(proxy) {
+		destRule := push.DestinationRule(proxy, service)
+		for _, port := range service.Ports {
+			if port.Protocol == protocol.UDP {
+				continue
+			}
+			inputParams.Service = service
+			inputParams.Port = port
+
+			lbEndpoints := buildLocalityLbEndpoints(env, networkView, service, port.Port, nil)
+
+			// create default cluster
+			discoveryType := convertResolution(service.Resolution)
+			clusterName := model.BuildSubsetKey(model.TrafficDirectionOutbound, &quot;&quot;, service.Hostname, port.Port)
+			serviceAccounts := push.ServiceAccounts[service.Hostname][port.Port]
+			defaultCluster := buildDefaultCluster(env, clusterName, discoveryType, lbEndpoints, model.TrafficDirectionOutbound, proxy, port)
+
+			setUpstreamProtocol(defaultCluster, port)
+			clusters = append(clusters, defaultCluster)
+
+			if destRule != nil {
+				// 组装Cluster，具体细节自己看代码
+                ......
+                
+			}
+
+			updateEds(defaultCluster)
+
+			// call plugins for the default cluster
+			for _, p := range configgen.Plugins {
+				p.OnOutboundCluster(inputParams, defaultCluster)
+			}
+		}
+	}
+
+	return clusters
+}
+</code></pre><p>我们先简单分析下上面的逻辑：</p>
+<p>（1）获取所有的Service（这个就是k8s上的Service）</p>
+<p>（2）获取DestinationRule，然后根据Service和DestinationRule组装Cluster</p>
+<p>具体逻辑建议看下源码，从上面的简单分析来看CDS资源其实就是Service和DestinationRule资源两者的组装，不过我想大家肯定有个疑问，Service和DestinationRule怎么获取？这个先不急，后面会详细分析这块的。</p>
+<p>所以CDS怎么获取到这里就很清晰了。</p>
+<h5 id="eds">EDS</h5>
+<p>先看下ads.go对于EDS分支的处理：</p>
+<pre><code>				if discReq.ErrorDetail != nil {
+					adsLog.Warnf(&quot;ADS:EDS: ACK ERROR %v %s (%s) %v&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.String())
+					errCode := codes.Code(discReq.ErrorDetail.Code)
+					incrementXDSRejects(edsReject, node.Id, errCode.String())
+					continue
+				}
+				// Envoy Sidecar的请求中需要带上需要计算Endpoint资源的Cluster集群
+				clusters := discReq.GetResourceNames()
+				if clusters == nil &amp;&amp; discReq.ResponseNonce != &quot;&quot; {
+					// There is no requirement that ACK includes clusters. The test doesn't.
+					con.mu.Lock()
+					con.EndpointNonceAcked = discReq.ResponseNonce
+					con.mu.Unlock()
+					continue
+				}
+				......
+				con.Clusters = clusters
+				adsLog.Debugf(&quot;ADS:EDS: REQ %s %s clusters:%d&quot;, peerAddr, con.ConID, len(con.Clusters))
+				err := s.pushEds(s.globalPushContext(), con, versionInfo(), nil)
+				if err != nil {
+					return err
+				}
+</code></pre><p>同理，s.pushEds负责计算EndPoint资源以及推送数据给Envoy Sidecar.注意，请求Endpoint资源时，Sidecar必须带上对应的集群信息，这样Pilot才知道要计算哪些Cluster的Endpoint信息。</p>
+<p>EndPoint资源的计算很简单，这里不做太多介绍，自己看下源码。</p>
+<h5 id="lds">LDS</h5>
+<p>先看下ads.go对于LDS分支的处理：</p>
+<pre><code>				if con.LDSWatch {
+					// Already received a cluster watch request, this is an ACK
+					if discReq.ErrorDetail != nil {
+						adsLog.Warnf(&quot;ADS:LDS: ACK ERROR %v %s (%s) %v&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.String())
+						errCode := codes.Code(discReq.ErrorDetail.Code)
+						incrementXDSRejects(ldsReject, node.Id, errCode.String())
+					} else if discReq.ResponseNonce != &quot;&quot; {
+						con.ListenerNonceAcked = discReq.ResponseNonce
+					}
+					adsLog.Debugf(&quot;ADS:LDS: ACK %s %s (%s) %s %s&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.VersionInfo, discReq.ResponseNonce)
+					continue
+				}
+				// too verbose - sent immediately after EDS response is received
+				adsLog.Debugf(&quot;ADS:LDS: REQ %s %v&quot;, con.ConID, peerAddr)
+				con.LDSWatch = true
+				err := s.pushLds(con, s.globalPushContext(), versionInfo())
+				if err != nil {
+					return err
+				}
+</code></pre><p>同理，s.pushLds负责Listener资源的计算以及下发数据至Envoy Sidecar.具体计算Listener的代码如下：</p>
+<pre><code>// pilot/pkg/networking/core/v1alpha3/listener.go
+func (configgen *ConfigGeneratorImpl) BuildListeners(env *model.Environment, node *model.Proxy,
+	push *model.PushContext) []*xdsapi.Listener {
+	builder := NewListenerBuilder(node)
+
+	switch node.Type {
+	case model.SidecarProxy:
+		builder = configgen.buildSidecarListeners(env, node, push, builder)
+	case model.Router:
+		builder = configgen.buildGatewayListeners(env, node, push, builder)
+	}
+
+	builder.patchListeners(push)
+	return builder.getListeners()
+}
+</code></pre><p>这里我们关注下SidecarProxy（Router这种方式是提供给Gateway使用的，注意，Istio中的Gateway也是带有Envoy sidecar的）。</p>
+<pre><code>// buildSidecarListeners produces a list of listeners for sidecar proxies
+func (configgen *ConfigGeneratorImpl) buildSidecarListeners(
+	env *model.Environment,
+	node *model.Proxy,
+	push *model.PushContext,
+	builder *ListenerBuilder) *ListenerBuilder {
+	mesh := env.Mesh
+
+	if mesh.ProxyListenPort &gt; 0 {
+		// Any build order change need a careful code review
+		builder.buildSidecarInboundListeners(configgen, env, node, push).
+			buildSidecarOutboundListeners(configgen, env, node, push).
+			buildManagementListeners(configgen, env, node, push).
+			buildVirtualOutboundListener(configgen, env, node, push).
+			buildVirtualInboundListener(configgen, env, node, push)
+	}
+
+	return builder
+}
+</code></pre><p>对于Inbound和OutBound的区别我想也不用解释太多，只是用来区分流量的方向，这种区别对于InboundListener和OutboundListener同样可用。不过要弄清楚这个概念，我们首先得清楚LDS的重要性。下面是我个人的理解：</p>
+<p><img src="../xDS_flow.png" alt="xDS处理流程"></p>
+<p>Listener中定义了Sidecar接收到流量之后的流程（各种各样的Filter，包括EnvoyFilter），所以这里区分InboundListener和OutboundListener，这样InboundListener接收到流量之后，流量最终会转发到Pod内部的应用，而OutBoundListener接收到的流量其实是Pod内部的应用发出来的，最终流量会走出Pod。</p>
+<p>至于InboundListener和OutBoundListener具体的配置选项一样，所以我们这边只看下OutboundListener。</p>
+<pre><code>func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListeners(env *model.Environment, node *model.Proxy,
+	push *model.PushContext) []*xdsapi.Listener {
+
+	noneMode := node.GetInterceptionMode() == model.InterceptionNone
+
+	actualWildcard, actualLocalHostAddress := getActualWildcardAndLocalHost(node)
+
+	var tcpListeners, httpListeners []*xdsapi.Listener
+	// For conflict resolution
+	listenerMap := make(map[string]*outboundListenerEntry)
+
+	for _, egressListener := range node.SidecarScope.EgressListeners {
+
+		services := egressListener.Services()
+        // VirtualService信息
+		virtualServices := egressListener.VirtualServices()
+
+		// determine the bindToPort setting for listeners
+		bindToPort := false
+		if noneMode {
+			// dont care what the listener's capture mode setting is. The proxy does not use iptables
+			bindToPort = true
+		} else if egressListener.IstioListener != nil &amp;&amp;
+			// proxy uses iptables redirect or tproxy. IF mode is not set
+			// for older proxies, it defaults to iptables redirect.  If the
+			// listener's capture mode specifies NONE, then the proxy wants
+			// this listener alone to be on a physical port. If the
+			// listener's capture mode is default, then its same as
+			// iptables i.e. bindToPort is false.
+			egressListener.IstioListener.CaptureMode == networking.CaptureMode_NONE {
+			bindToPort = true
+		}
+		// 省略细节
+		......
+			for _, service := range services {
+				listenerOpts := buildListenerOpts{
+					env:            env,
+					proxy:          node,
+					proxyInstances: node.ServiceInstances,
+					proxyLabels:    node.WorkloadLabels,
+					bind:           bind,
+					port:           listenPort.Port,
+					bindToPort:     bindToPort,
+				}
+
+				// The listener protocol is determined by the protocol of egress listener port.
+				pluginParams := &amp;plugin.InputParams{
+					ListenerProtocol: plugin.ModelProtocolToListenerProtocol(node, listenPort.Protocol,
+						core.TrafficDirection_OUTBOUND),
+					DeprecatedListenerCategory: networking.EnvoyFilter_DeprecatedListenerMatch_SIDECAR_OUTBOUND,
+					Env:                        env,
+					Node:                       node,
+					Push:                       push,
+					Bind:                       bind,
+					Port:                       listenPort,
+					Service:                    service,
+				}
+				// 这里构建真正的listener
+				configgen.buildSidecarOutboundListenerForPortOrUDS(node, listenerOpts, pluginParams, listenerMap,
+					virtualServices, actualWildcard)
+			}
+        // 省略细节
+		......
+	}
+
+	// Now validate all the listeners. Collate the tcp listeners first and then the HTTP listeners
+	// TODO: This is going to be bad for caching as the order of listeners in tcpListeners or httpListeners is not
+	// guaranteed.
+	invalid := 0.0
+	for name, l := range listenerMap {
+		if err := l.listener.Validate(); err != nil {
+			log.Warnf(&quot;buildSidecarOutboundListeners: error validating listener %s (type %v): %v&quot;, name, l.servicePort.Protocol, err)
+			invalid++
+			invalidOutboundListeners.Record(invalid)
+			continue
+		}
+		if l.servicePort.Protocol.IsTCP() {
+			tcpListeners = append(tcpListeners, l.listener)
+		} else {
+			httpListeners = append(httpListeners, l.listener)
+		}
+	}
+
+	tcpListeners = append(tcpListeners, httpListeners...)
+    // 如果是http协议的话，这里构建http的相关信息
+	httpProxy := configgen.buildHTTPProxy(env, node, push, node.ServiceInstances)
+	if httpProxy != nil {
+		httpProxy.TrafficDirection = core.TrafficDirection_OUTBOUND
+		tcpListeners = append(tcpListeners, httpProxy)
+	}
+
+	return tcpListeners
+}
+</code></pre><p>上面的代码会根据Service和VirtualService去构建，同理Service和VirtualService信息怎么得到的我们后面会分析。</p>
+<p>所以构建Listener的是configgen.buildSidecarOutboundListenerForPortOrUDS方法：</p>
+<pre><code>func (configgen *ConfigGeneratorImpl) buildSidecarOutboundListenerForPortOrUDS(node *model.Proxy, listenerOpts buildListenerOpts,
+	pluginParams *plugin.InputParams, listenerMap map[string]*outboundListenerEntry,
+	virtualServices []model.Config, actualWildcard string) {
+	if features.BlockHTTPonHTTPSPort.Get() {
+		if listenerOpts.port == CanonicalHTTPSPort &amp;&amp; pluginParams.Port.Protocol == protocol.HTTP {
+			msg := fmt.Sprintf(&quot;listener conflict detected: service %v specifies an HTTP service on HTTPS only port %d.&quot;,
+				pluginParams.Service.Hostname, CanonicalHTTPSPort)
+			pluginParams.Push.Add(model.ProxyStatusConflictOutboundListenerHTTPoverHTTPS, string(pluginParams.Service.Hostname), node, msg)
+			return
+		}
+	}
+	var destinationCIDR string
+	var listenerMapKey string
+	var currentListenerEntry *outboundListenerEntry
+	var ret bool
+	var opts []*filterChainOpts
+
+	conflictType := NoConflict
+
+	switch pluginParams.ListenerProtocol {
+	case plugin.ListenerProtocolHTTP:
+        // 构建Http的
+		if ret, opts = configgen.buildSidecarOutboundHTTPListenerOptsForPortOrUDS(node, &amp;listenerMapKey, &amp;currentListenerEntry,
+			&amp;listenerOpts, pluginParams, listenerMap, actualWildcard); !ret {
+			return
+		}
+		......
+
+	case plugin.ListenerProtocolTCP:
+        // 构建tcp的
+		if ret, opts = configgen.buildSidecarOutboundTCPListenerOptsForPortOrUDS(node, &amp;destinationCIDR, &amp;listenerMapKey, &amp;currentListenerEntry,
+			&amp;listenerOpts, pluginParams, listenerMap, virtualServices, actualWildcard); !ret {
+			return
+		}
+
+		......
+
+	case plugin.ListenerProtocolAuto:
+		// Add tcp filter chain, build TCP filter chain first.
+		if ret, opts = configgen.buildSidecarOutboundTCPListenerOptsForPortOrUDS(node, &amp;destinationCIDR, &amp;listenerMapKey, &amp;currentListenerEntry,
+			&amp;listenerOpts, pluginParams, listenerMap, virtualServices, actualWildcard); !ret {
+			return
+		}
+		listenerOpts.filterChainOpts = append(listenerOpts.filterChainOpts, opts...)
+
+		// Add http filter chain and tcp filter chain to the listener opts
+		if ret, opts = configgen.buildSidecarOutboundHTTPListenerOptsForPortOrUDS(node, &amp;listenerMapKey, &amp;currentListenerEntry,
+			&amp;listenerOpts, pluginParams, listenerMap, actualWildcard); !ret {
+			return
+		}
+
+		// Add application protocol filter chain match to the http filter chain. The application protocol will be set by http inspector
+		for _, opt := range opts {
+			if opt.match == nil {
+				opt.match = &amp;listener.FilterChainMatch{}
+			}
+
+			// Support HTTP/1.0, HTTP/1.1 and HTTP/2
+			opt.match.ApplicationProtocols = append(opt.match.ApplicationProtocols, applicationProtocols...)
+		}
+
+		listenerOpts.filterChainOpts = append(listenerOpts.filterChainOpts, opts...)
+		listenerOpts.needHTTPInspector = true
+
+		if currentListenerEntry != nil {
+			if currentListenerEntry.protocol.IsHTTP() {
+				conflictType = AutoOverHTTP
+			} else if currentListenerEntry.protocol.IsTCP() {
+				conflictType = AutoOverTCP
+			} else {
+				conflictType = AutoOverAuto
+			}
+		}
+
+	default:
+		// UDP or other protocols: no need to log, it's too noisy
+		return
+	}
+
+	// These wildcard listeners are intended for outbound traffic. However, there are cases where inbound traffic can hit these.
+	// This will happen when there is a no more specific inbound listener, either because Pilot hasn't sent it (race condition
+	// at startup), or because it never will (a port not specified in a service but captured by iptables).
+	// When this happens, Envoy will infinite loop sending requests to itself.
+	// To prevent this, we add a filter chain match that will match the pod ip and blackhole the traffic.
+	if listenerOpts.bind == actualWildcard &amp;&amp; features.RestrictPodIPTrafficLoops.Get() {
+		blackhole := blackholeStructMarshalling
+		if util.IsXDSMarshalingToAnyEnabled(pluginParams.Node) {
+			blackhole = blackholeAnyMarshalling
+		}
+		listenerOpts.filterChainOpts = append([]*filterChainOpts{{
+			destinationCIDRs: pluginParams.Node.IPAddresses,
+			networkFilters:   []*listener.Filter{&amp;blackhole},
+		}}, listenerOpts.filterChainOpts...)
+	}
+
+	// Lets build the new listener with the filter chains. In the end, we will
+	// merge the filter chains with any existing listener on the same port/bind point
+	l := buildListener(listenerOpts)
+	appendListenerFallthroughRoute(l, &amp;listenerOpts, pluginParams.Node, pluginParams.Env, currentListenerEntry)
+	l.TrafficDirection = core.TrafficDirection_OUTBOUND
+
+	mutable := &amp;plugin.MutableObjects{
+		Listener:     l,
+		FilterChains: getPluginFilterChain(listenerOpts),
+	}
+
+	for _, p := range configgen.Plugins {
+		if err := p.OnOutboundListener(pluginParams, mutable); err != nil {
+			log.Warn(err.Error())
+		}
+	}
+
+	// Filters are serialized one time into an opaque struct once we have the complete list.
+    // 这里会去真正构建完成的FilterChain
+	if err := buildCompleteFilterChain(pluginParams, mutable, listenerOpts); err != nil {
+		log.Warna(&quot;buildSidecarOutboundListeners: &quot;, err.Error())
+		return
+	}
+
+	// If there is a TCP listener on well known port, cannot add any http filter chain
+	// with the inspector as it will break for server-first protocols. Similarly,
+	// if there was a HTTP listener on well known port, cannot add a tcp listener
+	// with the inspector as inspector breaks all server-first protocols.
+	if currentListenerEntry != nil &amp;&amp;
+		!isConflictWithWellKnownPort(pluginParams.Port.Protocol, currentListenerEntry.protocol, conflictType) {
+		log.Warnf(&quot;conflict happens on a well known port %d, incoming protocol %v, existing protocol %v, conflict type %v&quot;,
+			pluginParams.Port.Port, pluginParams.Port.Protocol, currentListenerEntry.protocol, conflictType)
+		return
+	}
+
+	......
+}
+</code></pre><p>上面的代理，简单的逻辑如果：</p>
+<p>（1）根据协议（Http、Tcp或者Auto自适应）去构建对应的Listener，但这里构建出来的Listener的信息是不完整的</p>
+<p>（2）第一步构建出来的Listener信息了，但是不完整的，buildCompleteFilterChain去构建完整的FilterChain</p>
+<p>（注意，我们上面说了，Listener中定义了Sidecar接收到流量之后的流程（各种各样的Filter，包括EnvoyFilter），而FilterChian就是这个流程的配置信息，比如Listener接收流量后，流量用什么协议接收，接收之后，处理的过程中有很多Filter，包括EnvoyFilter的执行）</p>
+<p>第（1）步构建简单的Listener其实很简单，我们说下第二部buildCompleteFilterChain，如下：</p>
+<pre><code>func buildCompleteFilterChain(pluginParams *plugin.InputParams, mutable *plugin.MutableObjects, opts buildListenerOpts) error {
+	if len(opts.filterChainOpts) == 0 {
+		return fmt.Errorf(&quot;must have more than 0 chains in listener: %#v&quot;, mutable.Listener)
+	}
+
+	httpConnectionManagers := make([]*http_conn.HttpConnectionManager, len(mutable.FilterChains))
+	for i := range mutable.FilterChains {
+		// 根据协议构建各种各样的Listener信息
+        chain := mutable.FilterChains[i]
+		opt := opts.filterChainOpts[i]
+		mutable.Listener.FilterChains[i].Metadata = opt.metadata
+
+		// we are building a network filter chain (no http connection manager) for this filter chain
+		// In HTTP, we need to have mixer, RBAC, etc. upfront so that they can enforce policies immediately
+		// For network filters such as mysql, mongo, etc., we need the filter codec upfront. Data from this
+		// codec is used by RBAC or mixer later.
+		if opt.httpOpts == nil {
+
+			if len(opt.networkFilters) &gt; 0 {
+				// this is the terminating filter
+				lastNetworkFilter := opt.networkFilters[len(opt.networkFilters)-1]
+
+				for n := 0; n &lt; len(opt.networkFilters)-1; n++ {
+					mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, opt.networkFilters[n])
+				}
+				mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, chain.TCP...)
+				mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, lastNetworkFilter)
+			} else {
+				mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, chain.TCP...)
+			}
+			log.Debugf(&quot;attached %d network filters to listener %q filter chain %d&quot;, len(chain.TCP)+len(opt.networkFilters), mutable.Listener.Name, i)
+		} else {
+			// Add the TCP filters first.. and then the HTTP connection manager
+			mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, chain.TCP...)
+
+			opt.httpOpts.statPrefix = mutable.Listener.Name
+			httpConnectionManagers[i] = buildHTTPConnectionManager(pluginParams.Node, opts.env, opt.httpOpts, chain.HTTP)
+			filter := &amp;listener.Filter{
+				Name: xdsutil.HTTPConnectionManager,
+			}
+			if util.IsXDSMarshalingToAnyEnabled(pluginParams.Node) {
+				filter.ConfigType = &amp;listener.Filter_TypedConfig{TypedConfig: util.MessageToAny(httpConnectionManagers[i])}
+			} else {
+				filter.ConfigType = &amp;listener.Filter_Config{Config: util.MessageToStruct(httpConnectionManagers[i])}
+			}
+			mutable.Listener.FilterChains[i].Filters = append(mutable.Listener.FilterChains[i].Filters, filter)
+			log.Debugf(&quot;attached HTTP filter with %d http_filter options to listener %q filter chain %d&quot;,
+				len(httpConnectionManagers[i].HttpFilters), mutable.Listener.Name, i)
+		}
+	}
+
+	if !opts.skipUserFilters {
+        // 插入EnvoyFilter，命名上看是Deprecated，随时会被抛弃。。。。
+		// NOTE: we have constructed the HTTP connection manager filter above and we are passing the whole filter chain
+		// EnvoyFilter crd could choose to replace the HTTP ConnectionManager that we built or can choose to add
+		// more filters to the HTTP filter chain. In the latter case, the deprecatedInsertUserFilters function will
+		// overwrite the HTTP connection manager in the filter chain after inserting the new filters
+		return envoyfilter.DeprecatedInsertUserFilters(pluginParams, mutable.Listener, httpConnectionManagers)
+	}
+
+	return nil
+}
+</code></pre><p>所以，从上面的代码简单可以看出来：</p>
+<p>（1）根据协议添加对应协议的Filter</p>
+<p>（2）插入EnvoyFilter（envoyfilter.DeprecatedInsertUserFilters）</p>
+<p>所以看起来很清晰，对应的EnvoyFilter代码怎么插入可以自己看下代码，因为EnvoyFilter会根据Istio的版本发布而变动，所以每个版本的Pilot的EnvoyFilter代码处理那块都会有点不同。</p>
+<p>至此，我们简单梳理了Listener的处理过程了。</p>
+<h5 id="rds">RDS</h5>
+<p>先看下ads.go对于RDS分支的处理：</p>
+<pre><code>				if discReq.ErrorDetail != nil {
+					adsLog.Warnf(&quot;ADS:RDS: ACK ERROR %v %s (%s) %v&quot;, peerAddr, con.ConID, con.modelNode.ID, discReq.String())
+					errCode := codes.Code(discReq.ErrorDetail.Code)
+					incrementXDSRejects(rdsReject, node.Id, errCode.String())
+					continue
+				}
+				// 需要申请的路由信息名称列表
+				routes := discReq.GetResourceNames()
+				......
+
+				if sortedRoutes == nil {
+					sort.Strings(routes)
+					sortedRoutes = routes
+				}
+				con.Routes = sortedRoutes
+				adsLog.Debugf(&quot;ADS:RDS: REQ %s %s routes:%d&quot;, peerAddr, con.ConID, len(con.Routes))
+				err := s.pushRoute(con, s.globalPushContext(), versionInfo())
+				if err != nil {
+					return err
+				}
+</code></pre><p>（1）Envoy Sidecar申请RDS信息的时候需要告知Pilot其申请的路由信息是哪些，即路由信息名称列表</p>
+<p>（2）s.pushRoute 会计算路由信息以及下发资源到Envoy Sidecar</p>
+<p>具体计算路由信息的过程如下：</p>
+<pre><code>// BuildHTTPRoutes produces a list of routes for the proxy
+func (configgen *ConfigGeneratorImpl) BuildHTTPRoutes(env *model.Environment, node *model.Proxy, push *model.PushContext,
+	routeNames []string) []*xdsapi.RouteConfiguration {
+	routeConfigurations := make([]*xdsapi.RouteConfiguration, 0)
+
+	switch node.Type {
+	case model.SidecarProxy:
+		vHostCache := make(map[int][]*route.VirtualHost)
+		for _, routeName := range routeNames {
+            // 计算一个完整的RouteConfiguration信息
+			rc := configgen.buildSidecarOutboundHTTPRouteConfig(env, node, push, routeName, vHostCache)
+			if rc != nil {
+				rc = envoyfilter.ApplyRouteConfigurationPatches(networking.EnvoyFilter_SIDECAR_OUTBOUND, node, push, rc)
+			} else {
+				rc = &amp;xdsapi.RouteConfiguration{
+					Name:             routeName,
+					VirtualHosts:     []*route.VirtualHost{},
+					ValidateClusters: proto.BoolFalse,
+				}
+			}
+			routeConfigurations = append(routeConfigurations, rc)
+		}
+	case model.Router:
+		for _, routeName := range routeNames {
+			rc := configgen.buildGatewayHTTPRouteConfig(env, node, push, routeName)
+			if rc != nil {
+				rc = envoyfilter.ApplyRouteConfigurationPatches(networking.EnvoyFilter_GATEWAY, node, push, rc)
+			} else {
+				rc = &amp;xdsapi.RouteConfiguration{
+					Name:             routeName,
+					VirtualHosts:     []*route.VirtualHost{},
+					ValidateClusters: proto.BoolFalse,
+				}
+			}
+			routeConfigurations = append(routeConfigurations, rc)
+		}
+	}
+	return routeConfigurations
+}
+</code></pre><p>这里声明下，再Istio中，只有http协议的才需要计算route信息，tcp的route信息已经跟随Listener下发了。</p>
+<p>同理我们只关注SidecarProxy，其计算一个完整的Route信息方法：</p>
+<pre><code>func (configgen *ConfigGeneratorImpl) buildSidecarOutboundHTTPRouteConfig(env *model.Environment, node *model.Proxy, push *model.PushContext,
+	routeName string, vHostCache map[int][]*route.VirtualHost) *xdsapi.RouteConfiguration {
+
+	var virtualHosts []*route.VirtualHost
+	listenerPort := 0
+	useSniffing := false
+	var err error
+	if util.IsProtocolSniffingEnabledForOutbound(node) &amp;&amp;
+		!strings.HasPrefix(routeName, model.UnixAddressPrefix) {
+		index := strings.IndexRune(routeName, ':')
+		if index != -1 {
+			useSniffing = true
+		}
+		listenerPort, err = strconv.Atoi(routeName[index+1:])
+	} else {
+		listenerPort, err = strconv.Atoi(routeName)
+	}
+
+	if err != nil {
+		// we have a port whose name is http_proxy or unix:///foo/bar
+		// check for both.
+		if routeName != RDSHttpProxy &amp;&amp; !strings.HasPrefix(routeName, model.UnixAddressPrefix) {
+			// TODO: This is potentially one place where envoyFilter ADD operation can be helpful if the
+			// user wants to ship a custom RDS. But at this point, the match semantics are murky. We have no
+			// object to match upon. This needs more thought. For now, we will continue to return nil for
+			// unknown routes
+			return nil
+		}
+	}
+
+	cacheHit := false
+	if useSniffing &amp;&amp; listenerPort != 0 {
+		// Check if we have already computed the list of all virtual hosts for this port
+		// If so, then  we simply have to return only the relevant virtual hosts for
+		// this listener's host:port
+		if vhosts, exists := vHostCache[listenerPort]; exists {
+			virtualHosts = getVirtualHostsForSniffedServicePort(vhosts, routeName)
+			cacheHit = true
+		}
+	}
+	if !cacheHit {
+		virtualHosts = configgen.buildSidecarOutboundVirtualHosts(env, node, push, routeName, listenerPort)
+		if listenerPort &gt; 0 {
+			// only cache for tcp ports and not for uds
+			vHostCache[listenerPort] = virtualHosts
+		}
+
+		// FIXME: This will ignore virtual services with hostnames that do not match any service in the registry
+		// per api spec, these hostnames + routes should appear in the virtual hosts (think bookinfo.com and
+		// productpage.ns1.svc.cluster.local). See the TODO in buildSidecarOutboundVirtualHosts for the right solution
+		if useSniffing {
+			virtualHosts = getVirtualHostsForSniffedServicePort(virtualHosts, routeName)
+		}
+	}
+
+	util.SortVirtualHosts(virtualHosts)
+
+	if features.EnableFallthroughRoute.Get() &amp;&amp; !useSniffing {
+		// This needs to be the last virtual host, as routes are evaluated in order.
+		if util.IsAllowAnyOutbound(node) {
+			virtualHosts = append(virtualHosts, &amp;route.VirtualHost{
+				Name:    util.PassthroughRouteName,
+				Domains: []string{&quot;*&quot;},
+				Routes: []*route.Route{
+					{
+						Match: &amp;route.RouteMatch{
+							PathSpecifier: &amp;route.RouteMatch_Prefix{Prefix: &quot;/&quot;},
+						},
+						Action: &amp;route.Route_Route{
+							Route: &amp;route.RouteAction{
+								ClusterSpecifier: &amp;route.RouteAction_Cluster{Cluster: util.PassthroughCluster},
+							},
+						},
+					},
+				},
+			})
+		} else {
+			virtualHosts = append(virtualHosts, &amp;route.VirtualHost{
+				Name:    util.BlackHoleRouteName,
+				Domains: []string{&quot;*&quot;},
+				Routes: []*route.Route{
+					{
+						Match: &amp;route.RouteMatch{
+							PathSpecifier: &amp;route.RouteMatch_Prefix{Prefix: &quot;/&quot;},
+						},
+						Action: &amp;route.Route_DirectResponse{
+							DirectResponse: &amp;route.DirectResponseAction{
+								Status: 502,
+							},
+						},
+					},
+				},
+			})
+		}
+	}
+
+	out := &amp;xdsapi.RouteConfiguration{
+		Name:             routeName,
+        // 这个资源最重要
+		VirtualHosts:     virtualHosts,
+		ValidateClusters: proto.BoolFalse,
+	}
+
+	pluginParams := &amp;plugin.InputParams{
+		ListenerProtocol: plugin.ListenerProtocolHTTP,
+		ListenerCategory: networking.EnvoyFilter_SIDECAR_OUTBOUND,
+		Env:              env,
+		Node:             node,
+		Push:             push,
+		Port: &amp;model.Port{
+			Name:     &quot;&quot;,
+			Port:     listenerPort,
+			Protocol: protocol.HTTP,
+		},
+	}
+
+	// call plugins
+	for _, p := range configgen.Plugins {
+		p.OnOutboundRouteConfiguration(pluginParams, out)
+	}
+
+	return out
+}
+</code></pre><p>从上面的代理中我们可以清晰的看出，对于一个RouteConfiguration，其都会携带VirtualHosts，这个对于后面的路由起到关键的作用。</p>
+<p>简单说下VirtualHost为什么这么重要，我这边按照官方的Bookinfo为例子：</p>
+<pre><code>istioctl pc route productpage-v1-5ccf59b544-th6qw --name 9080 -o json
+</code></pre><p>输出:</p>
+<pre><code>[
+    {
+        &quot;name&quot;: &quot;9080&quot;,
+        &quot;virtualHosts&quot;: [
+            {
+                &quot;name&quot;: &quot;details.default.svc.cluster.local:9080&quot;,
+                &quot;domains&quot;: [
+                    &quot;details.default.svc.cluster.local&quot;,
+                    &quot;details.default.svc.cluster.local:9080&quot;,
+                    &quot;details&quot;,
+                    &quot;details:9080&quot;,
+                    &quot;details.default.svc.cluster&quot;,
+                    &quot;details.default.svc.cluster:9080&quot;,
+                    &quot;details.default.svc&quot;,
+                    &quot;details.default.svc:9080&quot;,
+                    &quot;details.default&quot;,
+                    &quot;details.default:9080&quot;,
+                    &quot;10.109.2.81&quot;,
+                    &quot;10.109.2.81:9080&quot;
+                ],
+                &quot;routes&quot;: [
+                    {
+                        &quot;name&quot;: &quot;default&quot;,
+                        &quot;match&quot;: {
+                            &quot;prefix&quot;: &quot;/&quot;
+                        },
+                        &quot;route&quot;: {
+                            &quot;cluster&quot;: &quot;outbound|9080||details.default.svc.cluster.local&quot;,
+                            ......
+                        },
+                        ......
+                    }
+                ]
+            },
+            {
+                &quot;name&quot;: &quot;productpage.default.svc.cluster.local:9080&quot;,
+                &quot;domains&quot;: [
+                    &quot;productpage.default.svc.cluster.local&quot;,
+                    &quot;productpage.default.svc.cluster.local:9080&quot;,
+                    &quot;productpage&quot;,
+                    &quot;productpage:9080&quot;,
+                    &quot;productpage.default.svc.cluster&quot;,
+                    &quot;productpage.default.svc.cluster:9080&quot;,
+                    &quot;productpage.default.svc&quot;,
+                    &quot;productpage.default.svc:9080&quot;,
+                    &quot;productpage.default&quot;,
+                    &quot;productpage.default:9080&quot;,
+                    &quot;10.98.20.239&quot;,
+                    &quot;10.98.20.239:9080&quot;
+                ],
+                &quot;routes&quot;: [
+                    {
+                        &quot;name&quot;: &quot;default&quot;,
+                        &quot;match&quot;: {
+                            &quot;prefix&quot;: &quot;/&quot;
+                        },
+                        &quot;route&quot;: {
+                            &quot;cluster&quot;: &quot;outbound|9080||productpage.default.svc.cluster.local&quot;,
+                            ......
+                        },
+                        ......
+                    }
+                ]
+            },
+            {
+                &quot;name&quot;: &quot;ratings.default.svc.cluster.local:9080&quot;,
+                &quot;domains&quot;: [
+                    &quot;ratings.default.svc.cluster.local&quot;,
+                    &quot;ratings.default.svc.cluster.local:9080&quot;,
+                    &quot;ratings&quot;,
+                    &quot;ratings:9080&quot;,
+                    &quot;ratings.default.svc.cluster&quot;,
+                    &quot;ratings.default.svc.cluster:9080&quot;,
+                    &quot;ratings.default.svc&quot;,
+                    &quot;ratings.default.svc:9080&quot;,
+                    &quot;ratings.default&quot;,
+                    &quot;ratings.default:9080&quot;,
+                    &quot;10.102.197.207&quot;,
+                    &quot;10.102.197.207:9080&quot;
+                ],
+                &quot;routes&quot;: [
+                    {
+                        &quot;name&quot;: &quot;default&quot;,
+                        &quot;match&quot;: {
+                            &quot;prefix&quot;: &quot;/&quot;
+                        },
+                        &quot;route&quot;: {
+                            &quot;cluster&quot;: &quot;outbound|9080||ratings.default.svc.cluster.local&quot;,
+                            ......
+                        },
+                        ......
+                    }
+                ]
+            },
+            {
+                &quot;name&quot;: &quot;reviews.default.svc.cluster.local:9080&quot;,
+                &quot;domains&quot;: [
+                    &quot;reviews.default.svc.cluster.local&quot;,
+                    &quot;reviews.default.svc.cluster.local:9080&quot;,
+                    &quot;reviews&quot;,
+                    &quot;reviews:9080&quot;,
+                    &quot;reviews.default.svc.cluster&quot;,
+                    &quot;reviews.default.svc.cluster:9080&quot;,
+                    &quot;reviews.default.svc&quot;,
+                    &quot;reviews.default.svc:9080&quot;,
+                    &quot;reviews.default&quot;,
+                    &quot;reviews.default:9080&quot;,
+                    &quot;10.98.43.194&quot;,
+                    &quot;10.98.43.194:9080&quot;
+                ],
+                &quot;routes&quot;: [
+                    {
+                        &quot;name&quot;: &quot;default&quot;,
+                        &quot;match&quot;: {
+                            &quot;prefix&quot;: &quot;/&quot;
+                        },
+                        &quot;route&quot;: {
+                            &quot;cluster&quot;: &quot;outbound|9080||reviews.default.svc.cluster.local&quot;,
+                            ......
+                        },
+                        ......
+                    }
+                ]
+            }
+        ],
+        &quot;validateClusters&quot;: false
+    }
+]
+</code></pre><p>先简单说明下，路由名称其实就是端口号，bookinfo对应的服务对应端口都是9080，所以其对应的route信息都会放到同一个9080中，而9080 RouteConfiguration区分不同服务就是通过VirtualHost，每个VirtualHost都带有name,domains和routes，其中domains就是域名信息列表，routes就是该服务真正的路由信息，其携带的route中会有cluster信息，这也就是为什么route能找到cluster的原因。</p>
+<p><strong>在k8s中，http服务访问都是通过域名访问，所以我们可以根据Listener中指定的路由名称9080找到RouteConfiguration，再根据RouteConfiguration中的VirtualHost列中的VirtualHost的domains列表进行域名匹配，匹配中了就能找到cluster集群名。</strong></p>
+<p>这样子，我们介绍完了xDS了。</p>
+
+                        </div>
+
+                        
+
+
+                        
+
+
+                        <div class="post-meta meta-tags">
+                            
+                            没有标签
+                            
+                        </div>
+                    </article>
+                    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= ""
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+                </div>
+            </div>
+            <div id="secondary">
+    <section class="widget">
+        <form id="search" action="/search/" method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://zhengzepeng.github.io/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">分类</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">标签</h3>
+<div class="tagcloud">
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">其它</h3>
+        <ul class="widget-list">
+            <li><a href="https://zhengzepeng.github.io/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+        </div>
+    </div>
+</div>
+<footer id="footer">
+    <div class="container">
+        &copy; 2020 <a href="https://zhengzepeng.github.io/">老郑 - 个人博客 By 老郑</a>.
+        Powered by <a rel="nofollow noreferer noopener" href="https://gohugo.io" target="_blank">Hugo</a>.
+        <a href="https://www.flysnow.org/" target="_blank">Theme</a> based on <a href="https://github.com/rujews/maupassant-hugo" target="_blank">maupassant</a>.
+        
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        
+        (function () {
+            $("pre code").parent().addClass("line-numbers")
+        }());
+
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script type="text/javascript" src="/js/prism.js" async="true"></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script>
+
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src="/js/totop.js?v=0.0.0" async=""></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+<script type="text/javascript">
+(function(){
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	if (!Prism.plugins.toolbar) {
+		console.warn('Copy to Clipboard plugin loaded before Toolbar plugin.');
+
+		return;
+	}
+
+	var ClipboardJS = window.ClipboardJS || undefined;
+
+	if (!ClipboardJS && typeof require === 'function') {
+		ClipboardJS = require('clipboard');
+	}
+
+	var callbacks = [];
+
+	if (!ClipboardJS) {
+		var script = document.createElement('script');
+		var head = document.querySelector('head');
+
+		script.onload = function() {
+			ClipboardJS = window.ClipboardJS;
+
+			if (ClipboardJS) {
+				while (callbacks.length) {
+					callbacks.pop()();
+				}
+			}
+		};
+
+		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js';
+		head.appendChild(script);
+	}
+
+	Prism.plugins.toolbar.registerButton('copy-to-clipboard', function (env) {
+		var linkCopy = document.createElement('button');
+		linkCopy.textContent = '复制代码';
+
+		if (!ClipboardJS) {
+			callbacks.push(registerClipboard);
+		} else {
+			registerClipboard();
+		}
+
+		return linkCopy;
+
+		function registerClipboard() {
+			var clip = new ClipboardJS(linkCopy, {
+				'text': function () {
+					return env.code;
+				}
+			});
+
+			clip.on('success', function() {
+				linkCopy.textContent = '复制成功!';
+
+				resetText();
+			});
+			clip.on('error', function () {
+				linkCopy.textContent = '按 Ctrl+C 复制';
+
+				resetText();
+			});
+		}
+
+		function resetText() {
+			setTimeout(function () {
+				linkCopy.textContent = '复制代码';
+			}, 5000);
+		}
+	});
+})();
+
+</script>
+</body>
+</html>

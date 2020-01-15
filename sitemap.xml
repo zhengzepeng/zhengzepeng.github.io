@@ -3,18 +3,28 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   
   <url>
-    <loc>https://zhengzepeng.github.io/post/First/</loc>
-    <lastmod>2019-12-05T16:36:58+08:00</lastmod>
+    <loc>https://zhengzepeng.github.io/istio/</loc>
+    <lastmod>2020-01-15T11:23:17+08:00</lastmod>
   </url>
   
   <url>
-    <loc>https://zhengzepeng.github.io/post/</loc>
-    <lastmod>2019-12-05T16:36:58+08:00</lastmod>
+    <loc>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-xDS%E8%A7%A3%E6%9E%90/</loc>
+    <lastmod>2020-01-15T11:23:17+08:00</lastmod>
   </url>
   
   <url>
     <loc>https://zhengzepeng.github.io/</loc>
-    <lastmod>2019-12-05T16:36:58+08:00</lastmod>
+    <lastmod>2020-01-15T11:23:17+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://zhengzepeng.github.io/search/</loc>
+    <lastmod>2019-12-05T17:06:08+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://zhengzepeng.github.io/archives/</loc>
+    <lastmod>2019-12-05T16:52:25+08:00</lastmod>
   </url>
   
   <url>
