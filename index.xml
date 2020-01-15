@@ -6,10 +6,19 @@
     <description>Recent content on 老郑 - 个人博客</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>zh-cn</language>
-    <lastBuildDate>Wed, 15 Jan 2020 11:23:17 +0800</lastBuildDate>
+    <lastBuildDate>Wed, 15 Jan 2020 15:54:56 +0800</lastBuildDate>
     
 	<atom:link href="https://zhengzepeng.github.io/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>Pilot源码阅读</title>
+      <link>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB/</link>
+      <pubDate>Wed, 15 Jan 2020 15:54:56 +0800</pubDate>
+      
+      <guid>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB/</guid>
+      <description>Pilot在Istio中是一个很重要的组件，Pilot 为 Envoy sidecar 提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。 首先声明下，Istio Pilot代码深度解析已经说得很清楚了，大家可以直接看这篇文章，下面的文章我纯属为了加</description>
+    </item>
     
     <item>
       <title>Pilot源码阅读--xDS解析</title>
@@ -17,7 +26,7 @@
       <pubDate>Wed, 15 Jan 2020 11:23:17 +0800</pubDate>
       
       <guid>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB-xDS%E8%A7%A3%E6%9E%90/</guid>
-      <description>Pilot源码阅读&amp;ndash;xDS解析 首先看下官网对于Pilot的介绍： Pilot 为 Envoy sidecar 提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。 Pilot 将控制流量行为的高级路由规则转换为特定于环境的配置，并在运行时将它们传播到 side</description>
+      <description>首先看下官网对于Pilot的介绍： Pilot 为 Envoy sidecar 提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。 Pilot 将控制流量行为的高级路由规则转换为特定于环境的配置，并在运行时将它们传播到 sidecar。Pilot 将特定于平台的服务发现机</description>
     </item>
     
     <item>

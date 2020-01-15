@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+
+    <meta charset="utf-8">
+    <meta name="generator" content="Hugo 0.60.1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Pilot源码阅读 | 老郑 - 个人博客</title>
+    <meta property="og:title" content="Pilot源码阅读 - 老郑 - 个人博客">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content="2020-01-15T15:54:56&#43;08:00">
+        
+        
+    <meta property="article:modified_time" content="2020-01-15T15:54:56&#43;08:00">
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Pilot源码阅读">
+        
+    <meta name="author" content="老郑">
+    <meta property="og:url" content="https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E9%98%85%E8%AF%BB/">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    
+        <link rel="stylesheet" href="/css/prism.css">
+    
+    <link rel="stylesheet" href="/css/style.css">
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+
+
+    
+    
+</head>
+
+<body>
+<header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://zhengzepeng.github.io/">
+                        老郑 - 个人博客
+                    </a>
+                
+                <p class="description">看书,写代码</p>
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="" href="https://zhengzepeng.github.io/">首页</a>
+                    
+                    <a  href="https://zhengzepeng.github.io/archives/" title="归档">归档</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+
+<div id="body">
+        
+        
+    <div class="container">
+        <div class="col-group">
+
+            <div class="col-8" id="main">
+                <div class="res-cons">
+                    <article class="post">
+                        <header>
+                            <h1 class="post-title">Pilot源码阅读</h1>
+                        </header>
+                        <date class="post-meta meta-date">
+                            2020年1月15日
+                        </date>
+                        
+                        
+                        <div class="post-meta">
+                            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span> 阅读</span></span>
+                        </div>
+                        
+                        
+                        <div class="post-content">
+                            <p>Pilot在Istio中是一个很重要的组件，Pilot 为 Envoy sidecar 提供服务发现、用于智能路由的流量管理功能（例如，A/B 测试、金丝雀发布等）以及弹性功能（超时、重试、熔断器等）。</p>
+<p>首先声明下，<a href="https://www.servicemesher.com/blog/201910-pilot-code-deep-dive/">Istio Pilot代码深度解析</a>已经说得很清楚了，大家可以直接看这篇文章，下面的文章我纯属为了加强我的记忆，大家可以选择看或者不看。</p>
+<h3 id="heading">启动模块</h3>
+<p>Pilot的入口如下：</p>
+<pre><code>// pilot/cmd/pilot-discovery/main.go
+	discoveryCmd = &amp;cobra.Command{
+		Use:   &quot;discovery&quot;,
+		Short: &quot;Start Istio proxy discovery service.&quot;,
+		Args:  cobra.ExactArgs(0),
+		RunE: func(c *cobra.Command, args []string) error {
+			cmd.PrintFlags(c.Flags())
+			if err := log.Configure(loggingOptions); err != nil {
+				return err
+			}
+
+			spiffe.SetTrustDomain(spiffe.DetermineTrustDomain(serverArgs.Config.ControllerOptions.TrustDomain, hasKubeRegistry()))
+
+			// Create the stop channel for all of the servers.
+			stop := make(chan struct{})
+
+			// Create the server for the discovery service.
+			discoveryServer, err := bootstrap.NewServer(serverArgs)
+			if err != nil {
+				return fmt.Errorf(&quot;failed to create discovery service: %v&quot;, err)
+			}
+
+			// Start the server
+			if err := discoveryServer.Start(stop); err != nil {
+				return fmt.Errorf(&quot;failed to start discovery service: %v&quot;, err)
+			}
+
+			cmd.WaitSignal(stop)
+			return nil
+		},
+	}
+</code></pre><p>其中bootstrap.NewServer(serverArgs)是关键：</p>
+<pre><code>//pilot/pkg/bootstrap/server.go
+// NewServer creates a new Server instance based on the provided arguments.
+func NewServer(args PilotArgs) (*Server, error) {
+	// If the namespace isn't set, try looking it up from the environment.
+	if args.Namespace == &quot;&quot; {
+		args.Namespace = podNamespaceVar.Get()
+	}
+	if args.KeepaliveOptions == nil {
+		args.KeepaliveOptions = istiokeepalive.DefaultOption()
+	}
+	if args.Config.ClusterRegistriesNamespace == &quot;&quot; {
+		if args.Namespace != &quot;&quot; {
+			args.Config.ClusterRegistriesNamespace = args.Namespace
+		} else {
+			args.Config.ClusterRegistriesNamespace = constants.IstioSystemNamespace
+		}
+	}
+
+	s := &amp;Server{
+		fileWatcher: filewatcher.NewWatcher(),
+	}
+
+	prometheus.EnableHandlingTimeHistogram()
+
+	// Apply the arguments to the configuration.
+	// 初始化kubeclient，这样才能连接到k8s中
+	if err := s.initKubeClient(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;kube client: %v&quot;, err)
+	}
+	// 初始化网格配置，里面包含了网格所需要的配置信息，比如galley服务的地址等
+	if err := s.initMesh(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;mesh: %v&quot;, err)
+	}
+	// TODO
+	if err := s.initMeshNetworks(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;mesh networks: %v&quot;, err)
+	}
+	// 初始化ConfigController，即与Galley建立连接，从Galley订阅资源，这样DestinationRule和VirtualService等资源才能从Galley中获取
+	if err := s.initConfigController(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;config controller: %v&quot;, err)
+	}
+	// 获取资源之后如何处理
+	if err := s.initServiceControllers(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;service controllers: %v&quot;, err)
+	}
+	// 提供xds服务，Envoy SideCar才能连接上来获取xDS服务
+	if err := s.initDiscoveryService(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;discovery service: %v&quot;, err)
+	}
+	if err := s.initMonitor(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;monitor: %v&quot;, err)
+	}
+	if err := s.initClusterRegistries(&amp;args); err != nil {
+		return nil, fmt.Errorf(&quot;cluster registries: %v&quot;, err)
+	}
+
+	if args.CtrlZOptions != nil {
+		_, _ = ctrlz.Run(args.CtrlZOptions, nil)
+	}
+
+	return s, nil
+}
+</code></pre><p>先看下Pilot的主要结构:</p>
+<p><img src="https://www.servicemesher.com/blog/201910-pilot-code-deep-dive/pilot-discovery.svg" alt="Pilot-Discovery代码结构"></p>
+<p>所以我们的关注点其实就只在于ConfigController、ServiceController和DiscoveryService，下面我也说下这三块。</p>
+<h4 id="configcontroller">ConfigController</h4>
+<p>即配置总控，其主要的作用是管理Istio的各种配置，目前Istio的配置主要包括：</p>
+<ul>
+<li>Virtual Service: 定义流量路由规则。</li>
+<li>Destination Rule: 定义和一个服务或者subset相关的流量处理规则，包括负载均衡策略，连接池大小，断路器设置，subset定义等等。</li>
+<li>Gateway: 定义入口网关上对外暴露的服务。</li>
+<li>Service Entry: 通过定义一个Service Entry可以将一个外部服务手动添加到服务网格中。</li>
+<li>Envoy Filter: 通过Pilot在Envoy的配置中添加一个自定义的Filter。</li>
+</ul>
+<pre><code>// pilot/pkg/bootstrap/server.go
+// initConfigController creates the config controller in the pilotConfig.
+func (s *Server) initConfigController(args *PilotArgs) error {
+	if len(s.mesh.ConfigSources) &gt; 0 {
+		// MCP的方式
+		if err := s.initMCPConfigController(args); err != nil {
+			return err
+		}
+	} else if args.Config.Controller != nil {
+		s.configController = args.Config.Controller
+	} else if args.Config.FileDir != &quot;&quot; {
+		store := memory.Make(model.IstioConfigTypes)
+		configController := memory.NewController(store)
+
+		err := s.makeFileMonitor(args.Config.FileDir, configController)
+		if err != nil {
+			return err
+		}
+
+		s.configController = configController
+	} else {
+		// k8s的方式
+		cfgController, err := s.makeKubeConfigController(args)
+		if err != nil {
+			return err
+		}
+
+		s.configController = cfgController
+	}
+
+	// Defer starting the controller until after the service is created.
+	s.addStartFunc(func(stop &lt;-chan struct{}) error {
+		go s.configController.Run(stop)
+		return nil
+	})
+
+	// If running in ingress mode (requires k8s), wrap the config controller.
+	if hasKubeRegistry(args) &amp;&amp; s.mesh.IngressControllerMode != meshconfig.MeshConfig_OFF {
+		// Wrap the config controller with a cache.
+		configController, err := configaggregate.MakeCache([]model.ConfigStoreCache{
+			s.configController,
+			ingress.NewController(s.kubeClient, s.mesh, args.Config.ControllerOptions),
+		})
+		if err != nil {
+			return err
+		}
+
+		// Update the config controller
+		s.configController = configController
+
+		if ingressSyncer, errSyncer := ingress.NewStatusSyncer(s.mesh, s.kubeClient,
+			args.Namespace, args.Config.ControllerOptions); errSyncer != nil {
+			log.Warnf(&quot;Disabled ingress status syncer due to %v&quot;, errSyncer)
+		} else {
+			s.addStartFunc(func(stop &lt;-chan struct{}) error {
+				go ingressSyncer.Run(stop)
+				return nil
+			})
+		}
+	}
+
+	// Create the config store.
+	s.istioConfigStore = model.MakeIstioStore(s.configController)
+
+	return nil
+}
+</code></pre><p>从上面的代码中我们可以看出，目前获取配置的主要方式有：</p>
+<p>（1）MCP</p>
+<p>具体的MCP详细说明可以看下这篇文章 <a href="https://www.servicemesher.com/blog/istio-analysis-3/">Istio庖丁解牛三：Galley</a></p>
+<p>所以我们可以通过MCP协议，与Galley交互，获取Istio的相关配置信息。</p>
+<p>（2）k8s</p>
+<p>Istio的所有配置，都是存储在Etcd中，而k8s中提供api-server，供外部应用操作etcd，所以可以直接从api-server中获取Istio的相关配置。但是这种方式耦合度太高，MCP方式所以的配置资源都再Galley中实现，降低了耦合度。</p>
+<p>这里我只关注MCP的方式。</p>
+<pre><code>func (s *Server) initMCPConfigController(args *PilotArgs) error {
+	clientNodeID := &quot;&quot;
+	collections := make([]sink.CollectionOptions, len(model.IstioConfigTypes))
+	for i, t := range model.IstioConfigTypes {
+		collections[i] = sink.CollectionOptions{Name: t.Collection, Incremental: false}
+	}
+
+	options := coredatamodel.Options{
+		DomainSuffix: args.Config.ControllerOptions.DomainSuffix,
+		// 接收到Galley数据之后，最终会执行到的。
+		ClearDiscoveryServerCache: func() {
+			s.EnvoyXdsServer.ConfigUpdate(&amp;model.PushRequest{Full: true})
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var clients []*sink.Client
+	var conns []*grpc.ClientConn
+	var configStores []model.ConfigStoreCache
+
+	reporter := monitoring.NewStatsContext(&quot;pilot&quot;)
+
+	for _, configSource := range s.mesh.ConfigSources {
+		......
+		
+		// 这里真正跟Galley建立连接
+		conn, err := grpc.DialContext(
+			ctx, configSource.Address,
+			securityOption, msgSizeOption, keepaliveOption, initialWindowSizeOption, initialConnWindowSizeOption)
+		if err != nil {
+			log.Errorf(&quot;Unable to dial MCP Server %q: %v&quot;, configSource.Address, err)
+			cancel()
+			return err
+		}
+
+		// 涉及到具体要订阅的信息以及同步情况
+		mcpController := coredatamodel.NewController(options)
+		// 这里Updater指定为mcpController，后续资源更新的时候，sink会调用Updater的Apply方法
+		sinkOptions := &amp;sink.Options{
+			CollectionOptions: collections,
+			Updater:           mcpController,
+			ID:                clientNodeID,
+			Reporter:          reporter,
+		}
+		// 这里调用对应的Galley接口
+		cl := mcpapi.NewResourceSourceClient(conn)
+		mcpClient := sink.NewClient(cl, sinkOptions)
+		configz.Register(mcpClient)
+		clients = append(clients, mcpClient)
+
+		conns = append(conns, conn)
+		configStores = append(configStores, mcpController)
+	}
+
+	......
+
+	// Wrap the config controller with a cache.
+	aggregateMcpController, err := configaggregate.MakeCache(configStores)
+	if err != nil {
+		return err
+	}
+	s.configController = aggregateMcpController
+	return nil
+}
+</code></pre><p>上面的mcpController里面涉及到了具体的订阅信息，当sink端接收到数据变化的时候，就会调用mcpController的Apply方法进行处理：</p>
+<pre><code>// pilot/pkg/config/coredatamodel/controller.go
+func (c *Controller) Apply(change *sink.Change) error {
+	// 接收到的数据的数据类型
+	descriptor, ok := c.descriptorsByCollection[change.Collection]
+	if !ok {
+		return fmt.Errorf(&quot;apply type not supported %s&quot;, change.Collection)
+	}
+
+	schema, valid := c.ConfigDescriptor().GetByType(descriptor.Type)
+	if !valid {
+		return fmt.Errorf(&quot;descriptor type not supported %s&quot;, descriptor.Type)
+	}
+
+	c.syncedMu.Lock()
+	c.synced[change.Collection] = true
+	c.syncedMu.Unlock()
+
+	// innerStore is [namespace][name]
+	innerStore := make(map[string]map[string]*model.Config)
+	for _, obj := range change.Objects {
+		namespace, name := extractNameNamespace(obj.Metadata.Name)
+
+		createTime := time.Now()
+		if obj.Metadata.CreateTime != nil {
+			var err error
+			if createTime, err = types.TimestampFromProto(obj.Metadata.CreateTime); err != nil {
+				// Do not return an error, instead discard the resources so that Pilot can process the rest.
+				log.Warnf(&quot;Discarding incoming MCP resource: invalid resource timestamp (%s/%s): %v&quot;, namespace, name, err)
+				continue
+			}
+		}
+
+		// 接收到的数据
+		conf := &amp;model.Config{
+			ConfigMeta: model.ConfigMeta{
+				Type:              descriptor.Type,
+				Group:             descriptor.Group,
+				Version:           descriptor.Version,
+				Name:              name,
+				Namespace:         namespace,
+				ResourceVersion:   obj.Metadata.Version,
+				CreationTimestamp: createTime,
+				Labels:            obj.Metadata.Labels,
+				Annotations:       obj.Metadata.Annotations,
+				Domain:            c.options.DomainSuffix,
+			},
+			Spec: obj.Body,
+		}
+
+		// 校验
+		if err := schema.Validate(conf.Name, conf.Namespace, conf.Spec); err != nil {
+			// Do not return an error, instead discard the resources so that Pilot can process the rest.
+			log.Warnf(&quot;Discarding incoming MCP resource: validation failed (%s/%s): %v&quot;, conf.Namespace, conf.Name, err)
+			continue
+		}
+
+		// 校验成功后之后进行数据存储
+		namedConfig, ok := innerStore[conf.Namespace]
+		if ok {
+			namedConfig[conf.Name] = conf
+		} else {
+			innerStore[conf.Namespace] = map[string]*model.Config{
+				conf.Name: conf,
+			}
+		}
+	}
+
+	var prevStore map[string]map[string]*model.Config
+
+	c.configStoreMu.Lock()
+	prevStore = c.configStore[descriptor.Type]
+	// 最终的数据会存储到configStore中
+	c.configStore[descriptor.Type] = innerStore
+	c.configStoreMu.Unlock()
+
+	if descriptor.Type == model.ServiceEntry.Type {
+		c.serviceEntryEvents(innerStore, prevStore)
+	} else {
+		// 数据存储好后，清理掉原先的缓存并重新生成数据，initMCPConfigController中定义的
+		c.options.ClearDiscoveryServerCache()
+	}
+
+	return nil
+}
+</code></pre><p>从上面的代码我们可以看出，</p>
+<p>（1）接收的数据最终会存储到pilot/pkg/config/coredatamodel/controller.go 中的Controller.configStore中。</p>
+<p>（2）存储数据后，触发清理缓存事件处理，即如下：</p>
+<pre><code>	options := coredatamodel.Options{
+		DomainSuffix: args.Config.ControllerOptions.DomainSuffix,
+		// 接收到Galley数据之后，最终会执行到的。
+		ClearDiscoveryServerCache: func() {
+			s.EnvoyXdsServer.ConfigUpdate(&amp;model.PushRequest{Full: true})
+		},
+	}
+</code></pre><p>即全量跟新DiscoveryService中的缓存数据</p>
+<pre><code>// ConfigUpdate implements ConfigUpdater interface, used to request pushes.
+// It replaces the 'clear cache' from v1.
+func (s *DiscoveryServer) ConfigUpdate(req *model.PushRequest) {
+	inboundConfigUpdates.Increment()
+	s.pushChannel &lt;- req
+}
+</code></pre><p>后面我们详细介绍这块，所以到目前为止，ConfigController我们基本介绍完毕。</p>
+<h4 id="servicecontroller">ServiceController</h4>
+<p>这个服务主要是连接到注册中心获取Service相关的信息，比如Service、EndPoint等信息。这里的注册中心有很多，比如k8s、mcp、consul等，但这里我们只介绍k8s的。</p>
+<pre><code>// initServiceControllers creates and initializes the service controllers
+func (s *Server) initServiceControllers(args *PilotArgs) error {
+	serviceControllers := aggregate.NewController()
+	registered := make(map[serviceregistry.ServiceRegistry]bool)
+	for _, r := range args.Service.Registries {
+		serviceRegistry := serviceregistry.ServiceRegistry(r)
+		if _, exists := registered[serviceRegistry]; exists {
+			log.Warnf(&quot;%s registry specified multiple times.&quot;, r)
+			continue
+		}
+		registered[serviceRegistry] = true
+		log.Infof(&quot;Adding %s registry adapter&quot;, serviceRegistry)
+		switch serviceRegistry {
+		case serviceregistry.MockRegistry:
+			s.initMemoryRegistry(serviceControllers)
+		case serviceregistry.KubernetesRegistry:
+			// 到k8s中获取数据
+			if err := s.createK8sServiceControllers(serviceControllers, args); err != nil {
+				return err
+			}
+		case serviceregistry.ConsulRegistry:
+			if err := s.initConsulRegistry(serviceControllers, args); err != nil {
+				return err
+			}
+		case serviceregistry.MCPRegistry:
+			log.Infof(&quot;no-op: get service info from MCP ServiceEntries.&quot;)
+		default:
+			return fmt.Errorf(&quot;service registry %s is not supported&quot;, r)
+		}
+	}
+
+	serviceEntryStore := external.NewServiceDiscovery(s.configController, s.istioConfigStore)
+
+	// add service entry registry to aggregator by default
+	serviceEntryRegistry := aggregate.Registry{
+		Name:             &quot;ServiceEntries&quot;,
+		Controller:       serviceEntryStore,
+		ServiceDiscovery: serviceEntryStore,
+	}
+	serviceControllers.AddRegistry(serviceEntryRegistry)
+
+	s.ServiceController = serviceControllers
+
+	// Defer running of the service controllers.
+	s.addStartFunc(func(stop &lt;-chan struct{}) error {
+		go s.ServiceController.Run(stop)
+		return nil
+	})
+
+	return nil
+}
+</code></pre><p>我们看下k8s获取数据是怎么操作的：</p>
+<pre><code>// createK8sServiceControllers creates all the k8s service controllers under this pilot
+func (s *Server) createK8sServiceControllers(serviceControllers *aggregate.Controller, args *PilotArgs) (err error) {
+	clusterID := string(serviceregistry.KubernetesRegistry)
+	log.Infof(&quot;Primary Cluster name: %s&quot;, clusterID)
+	args.Config.ControllerOptions.ClusterID = clusterID
+	// 这里监控k8s资源的变化
+	kubectl := controller2.NewController(s.kubeClient, args.Config.ControllerOptions)
+	s.kubeRegistry = kubectl
+	serviceControllers.AddRegistry(
+		aggregate.Registry{
+			Name:             serviceregistry.KubernetesRegistry,
+			ClusterID:        clusterID,
+			ServiceDiscovery: kubectl,
+			Controller:       kubectl,
+		})
+
+	return
+}
+</code></pre><pre><code>// pilot/pkg/serviceregistry/kube/controller/controller.go
+// NewController creates a new Kubernetes controller
+// Created by bootstrap and multicluster (see secretcontroler).
+func NewController(client kubernetes.Interface, options Options) *Controller {
+	log.Infof(&quot;Service controller watching namespace %q for services, endpoints, nodes and pods, refresh %s&quot;,
+		options.WatchedNamespace, options.ResyncPeriod)
+
+	// Queue requires a time duration for a retry delay after a handler error
+	out := &amp;Controller{
+		domainSuffix:               options.DomainSuffix,
+		client:                     client,
+		queue:                      kube.NewQueue(1 * time.Second),
+		ClusterID:                  options.ClusterID,
+		XDSUpdater:                 options.XDSUpdater,
+		servicesMap:                make(map[host.Name]*model.Service),
+		externalNameSvcInstanceMap: make(map[host.Name][]*model.ServiceInstance),
+	}
+
+	sharedInformers := informers.NewSharedInformerFactoryWithOptions(client, options.ResyncPeriod, informers.WithNamespace(options.WatchedNamespace))
+
+	svcInformer := sharedInformers.Core().V1().Services().Informer()
+	out.services = out.createCacheHandler(svcInformer, &quot;Services&quot;)
+
+	epInformer := sharedInformers.Core().V1().Endpoints().Informer()
+	out.endpoints = out.createEDSCacheHandler(epInformer, &quot;Endpoints&quot;)
+
+	nodeInformer := sharedInformers.Core().V1().Nodes().Informer()
+	out.nodes = out.createCacheHandler(nodeInformer, &quot;Nodes&quot;)
+
+	podInformer := sharedInformers.Core().V1().Pods().Informer()
+	out.pods = newPodCache(out.createCacheHandler(podInformer, &quot;Pod&quot;), out)
+
+	return out
+}
+</code></pre><p>从上面看到，pilot只关注Service、Endpoint、Node、Pod这四种资源，接下来我们看下获取到这四种资源变动之后的操作:</p>
+<p>（1）Service、Node、Pod资源的处理器</p>
+<pre><code>// 这个针对的是Service、Node、Pod资源的处理器
+func (c *Controller) createCacheHandler(informer cache.SharedIndexInformer, otype string) cacheHandler {
+	// 真正执行的Handler
+	handler := &amp;kube.ChainHandler{Funcs: []kube.Handler{c.notify}}
+
+	informer.AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			// TODO: filtering functions to skip over un-referenced resources (perf)
+			AddFunc: func(obj interface{}) {
+				incrementEvent(otype, &quot;add&quot;)
+				// 新增资源，调用上面的Handler
+				c.queue.Push(kube.Task{Handler: handler.Apply, Obj: obj, Event: model.EventAdd})
+			},
+			UpdateFunc: func(old, cur interface{}) {
+				if !reflect.DeepEqual(old, cur) {
+					incrementEvent(otype, &quot;update&quot;).
+					// 变更资源，调用上面的Handler
+					c.queue.Push(kube.Task{Handler: handler.Apply, Obj: cur, Event: model.EventUpdate})
+				} else {
+					incrementEvent(otype, &quot;updatesame&quot;)
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				incrementEvent(otype, &quot;delete&quot;)
+				// 删除资源，调用上面的Handler
+				c.queue.Push(kube.Task{Handler: handler.Apply, Obj: obj, Event: model.EventDelete})
+			},
+		})
+
+	return cacheHandler{informer: informer, handler: handler}
+}
+</code></pre><p>资源变动之后，会把资源推到queue中：</p>
+<pre><code>func (q *queueImpl) Run(stop &lt;-chan struct{}) {
+	go func() {
+		&lt;-stop
+		q.cond.L.Lock()
+		q.closing = true
+		q.cond.L.Unlock()
+	}()
+
+	for {
+		q.cond.L.Lock()
+		for !q.closing &amp;&amp; len(q.queue) == 0 {
+			q.cond.Wait()
+		}
+
+		if len(q.queue) == 0 {
+			q.cond.L.Unlock()
+			// We must be shutting down.
+			return
+		}
+
+		var item Task
+		item, q.queue = q.queue[0], q.queue[1:]
+		q.cond.L.Unlock()
+		// 调用真正的处理器
+		if err := item.Handler(item.Obj, item.Event); err != nil {
+			log.Infof(&quot;Work item handle failed (%v), retry after delay %v&quot;, err, q.delay)
+			time.AfterFunc(q.delay, func() {
+				q.Push(item)
+			})
+		}
+
+	}
+}
+</code></pre><p>queue队列接收到之后，就调用真正的处理器，上面真正执行的Handler的代码如下：</p>
+<pre><code>// notify is the first handler in the handler chain.
+// Returning an error causes repeated execution of the entire chain.
+func (c *Controller) notify(obj interface{}, event model.Event) error {
+	if !c.HasSynced() {
+		return errors.New(&quot;waiting till full synchronization&quot;)
+	}
+	return nil
+}
+</code></pre><p>其实就是等待资源的同步而已，没有其他操作了。</p>
+<p>（2）EndPoint的资源处理器</p>
+<pre><code>func (c *Controller) createEDSCacheHandler(informer cache.SharedIndexInformer, otype string) cacheHandler {
+	handler := &amp;kube.ChainHandler{Funcs: []kube.Handler{c.notify}}
+
+	informer.AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			// TODO: filtering functions to skip over un-referenced resources (perf)
+			AddFunc: func(obj interface{}) {
+				incrementEvent(otype, &quot;add&quot;)
+				c.queue.Push(kube.Task{Handler: handler.Apply, Obj: obj, Event: model.EventAdd})
+			},
+			UpdateFunc: func(old, cur interface{}) {
+				// Avoid pushes if only resource version changed (kube-scheduller, cluster-autoscaller, etc)
+				oldE := old.(*v1.Endpoints)
+				curE := cur.(*v1.Endpoints)
+
+				if !reflect.DeepEqual(oldE.Subsets, curE.Subsets) {
+					incrementEvent(otype, &quot;update&quot;)
+					c.queue.Push(kube.Task{Handler: handler.Apply, Obj: cur, Event: model.EventUpdate})
+				} else {
+					incrementEvent(otype, &quot;updatesame&quot;)
+				}
+			},
+			DeleteFunc: func(obj interface{}) {
+				incrementEvent(otype, &quot;delete&quot;)
+				// Deleting the endpoints results in an empty set from EDS perspective - only
+				// deleting the service should delete the resources. The full sync replaces the
+				// maps.
+				// c.updateEDS(obj.(*v1.Endpoints))
+				c.queue.Push(kube.Task{Handler: handler.Apply, Obj: obj, Event: model.EventDelete})
+			},
+		})
+
+	return cacheHandler{informer: informer, handler: handler}
+}
+</code></pre><p>同理，跟（1）基本一致。</p>
+<p>从（1）和（2）上看，数据变更了，pilot根本就没存储，怎么下发的数据还有呢？别急，往下看：</p>
+<p>pilot/pkg/serviceregistry/kube/controller/controller.go实现了pilot/pkg/model/controller.go中的Controller接口，我们看下接口的定义：</p>
+<pre><code>type Controller interface {
+	// AppendServiceHandler notifies about changes to the service catalog.
+	AppendServiceHandler(f func(*Service, Event)) error
+
+	// AppendInstanceHandler notifies about changes to the service instances
+	// for a service.
+	AppendInstanceHandler(f func(*ServiceInstance, Event)) error
+
+	// Run until a signal is received
+	Run(stop &lt;-chan struct{})
+}
+</code></pre><p>接着我们看下k8s controller的实现：</p>
+<pre><code>func (c *Controller) AppendServiceHandler(f func(*model.Service, model.Event)) error {
+	c.services.handler.Append(func(obj interface{}, event model.Event) error {
+		svc, ok := obj.(*v1.Service)
+		......
+		svcConv := kube.ConvertService(*svc, c.domainSuffix, c.ClusterID)
+		instances := kube.ExternalNameServiceInstances(*svc, svcConv)
+		switch event {
+		case model.EventDelete:
+			c.Lock()
+			delete(c.servicesMap, svcConv.Hostname)
+			delete(c.externalNameSvcInstanceMap, svcConv.Hostname)
+			c.Unlock()
+		default:
+			c.Lock()
+			// 进行Service数据存储
+			c.servicesMap[svcConv.Hostname] = svcConv
+			if instances == nil {
+				delete(c.externalNameSvcInstanceMap, svcConv.Hostname)
+			} else {
+				c.externalNameSvcInstanceMap[svcConv.Hostname] = instances
+			}
+			c.Unlock()
+		}
+		// EDS needs the port mapping.
+		// svc数据变动
+		c.XDSUpdater.SvcUpdate(c.ClusterID, hostname, ports, portsByNum)
+
+		f(svcConv, event)
+
+		return nil
+	})
+	return nil
+}
+</code></pre><p>上面可以看到，Service的数据存储到Controller的servicesMap中</p>
+<pre><code>// AppendInstanceHandler implements a service catalog operation
+func (c *Controller) AppendInstanceHandler(f func(*model.ServiceInstance, model.Event)) error {
+	if c.endpoints.handler == nil {
+		return nil
+	}
+	c.endpoints.handler.Append(func(obj interface{}, event model.Event) error {
+		ep, ok := obj.(*v1.Endpoints)
+		if !ok {
+			tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+			if !ok {
+				log.Errorf(&quot;Couldn't get object from tombstone %#v&quot;, obj)
+				return nil
+			}
+			ep, ok = tombstone.Obj.(*v1.Endpoints)
+			if !ok {
+				log.Errorf(&quot;Tombstone contained object that is not a service %#v&quot;, obj)
+				return nil
+			}
+		}
+		// 数据变动
+		c.updateEDS(ep, event)
+
+		return nil
+	})
+
+	return nil
+}
+</code></pre><p>继续看下updateEDS方法:</p>
+<pre><code>func (c *Controller) updateEDS(ep *v1.Endpoints, event model.Event) {
+	hostname := kube.ServiceHostname(ep.Name, ep.Namespace, c.domainSuffix)
+	mixerEnabled := c.Env != nil &amp;&amp; c.Env.Mesh != nil &amp;&amp; (c.Env.Mesh.MixerCheckServer != &quot;&quot; || c.Env.Mesh.MixerReportServer != &quot;&quot;)
+
+	endpoints := make([]*model.IstioEndpoint, 0)
+	......// 省略的步骤为计算endpoint资源 
+
+	if log.InfoEnabled() {
+		var addresses []string
+		for _, ss := range ep.Subsets {
+			for _, a := range ss.Addresses {
+				addresses = append(addresses, a.IP)
+			}
+		}
+		log.Infof(&quot;Handle EDS endpoint %s in namespace %s -&gt; %v&quot;, ep.Name, ep.Namespace, addresses)
+	}
+
+	if features.EnableHeadlessService.Get() {
+		if obj, _, _ := c.services.informer.GetIndexer().GetByKey(kube.KeyFunc(ep.Name, ep.Namespace)); obj != nil {
+			svc := obj.(*v1.Service)
+			// if the service is headless service, trigger a full push.
+			if svc.Spec.ClusterIP == v1.ClusterIPNone {
+				c.XDSUpdater.ConfigUpdate(&amp;model.PushRequest{Full: true, TargetNamespaces: map[string]struct{}{ep.Namespace: {}}})
+				return
+			}
+		}
+	}
+	// 更新计算出来的endpoint资源
+	_ = c.XDSUpdater.EDSUpdate(c.ClusterID, string(hostname), ep.Namespace, endpoints)
+}
+</code></pre><p>从上面的代码可以看出，其使用c.XDSUpdater.EDSUpdate更新计算出来的endpoint资源：</p>
+<pre><code>// pilot/pkg/proxy/envoy/v2/eds.go
+func (s *DiscoveryServer) EDSUpdate(shard, serviceName string, namespace string,
+	istioEndpoints []*model.IstioEndpoint) error {
+	inboundEDSUpdates.Increment()
+	s.edsUpdate(shard, serviceName, namespace, istioEndpoints, false)
+	return nil
+}
+
+// edsUpdate updates edsUpdates by shard, serviceName, IstioEndpoints,
+// and requests a full/eds push.
+func (s *DiscoveryServer) edsUpdate(shard, serviceName string, namespace string,
+	istioEndpoints []*model.IstioEndpoint, internal bool) {
+	// edsShardUpdate replaces a subset (shard) of endpoints, as result of an incremental
+	// update. The endpoint updates may be grouped by K8S clusters, other service registries
+	// or by deployment. Multiple updates are debounced, to avoid too frequent pushes.
+	// After debounce, the services are merged and pushed.
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	requireFull := false
+
+	......
+
+	// Update the data structures for the service.
+	// 1. Find the 'per service' data
+	if _, f := s.EndpointShardsByService[serviceName]; !f {
+		s.EndpointShardsByService[serviceName] = map[string]*EndpointShards{}
+	}
+	ep, f := s.EndpointShardsByService[serviceName][namespace]
+	if !f {
+		// This endpoint is for a service that was not previously loaded.
+		// Return an error to force a full sync, which will also cause the
+		// EndpointsShardsByService to be initialized with all services.
+		ep = &amp;EndpointShards{
+			Shards:          map[string][]*model.IstioEndpoint{},
+			ServiceAccounts: map[string]bool{},
+		}
+		s.EndpointShardsByService[serviceName][namespace] = ep
+		if !internal {
+			adsLog.Infof(&quot;Full push, new service %s&quot;, serviceName)
+			requireFull = true
+		}
+	}
+
+	// 2. Update data for the specific cluster. Each cluster gets independent
+	// updates containing the full list of endpoints for the service in that cluster.
+	for _, e := range istioEndpoints {
+		if e.ServiceAccount != &quot;&quot; {
+			ep.mutex.Lock()
+			_, f = ep.ServiceAccounts[e.ServiceAccount]
+			if !f {
+				ep.ServiceAccounts[e.ServiceAccount] = true
+			}
+			ep.mutex.Unlock()
+
+			if !f &amp;&amp; !internal {
+				// The entry has a service account that was not previously associated.
+				// Requires a CDS push and full sync.
+				adsLog.Infof(&quot;Endpoint updating service account %s %s&quot;, e.ServiceAccount, serviceName)
+				requireFull = true
+				break
+			}
+		}
+	}
+	ep.mutex.Lock()
+	// 最终存储再这里
+	ep.Shards[shard] = istioEndpoints
+	ep.mutex.Unlock()
+
+	// for internal update: this called by DiscoveryServer.Push --&gt; updateServiceShards,
+	// no need to trigger push here.
+	// It is done in DiscoveryServer.Push --&gt; AdsPushAll
+	if !internal {
+		var edsUpdates map[string]struct{}
+		if !requireFull {
+			edsUpdates = map[string]struct{}{serviceName: {}}
+		}
+		s.ConfigUpdate(&amp;model.PushRequest{
+			Full:             requireFull,
+			TargetNamespaces: map[string]struct{}{namespace: {}},
+			EdsUpdates:       edsUpdates,
+		})
+	}
+}
+
+</code></pre><p>从上面的代码可以看出，最终Endpoint的数据存储再ep.Shards中,ep存储再DiscoveryServer的EndpointShardsByService中。</p>
+<p><strong>所以综上所属，EndPoint存在再DiscoveryServer的EndpointShardsByService，Service存再k8s Controller的servicesMap中。</strong></p>
+<h4 id="discoveryservice">DiscoveryService</h4>
+<p>首先看下初始化的方法：</p>
+<pre><code>func (s *Server) initDiscoveryService(args *PilotArgs) error {
+	environment := &amp;model.Environment{
+		Mesh:             s.mesh,
+		MeshNetworks:     s.meshNetworks,
+		IstioConfigStore: s.istioConfigStore,
+		ServiceDiscovery: s.ServiceController,
+		PushContext:      model.NewPushContext(),
+	}
+
+	// Set up discovery service
+	discovery, err := envoy.NewDiscoveryService(
+		environment,
+		args.DiscoveryOptions,
+	)
+	if err != nil {
+		return fmt.Errorf(&quot;failed to create discovery service: %v&quot;, err)
+	}
+	s.mux = discovery.RestContainer.ServeMux
+	// XdsServer
+	s.EnvoyXdsServer = envoyv2.NewDiscoveryServer(environment,
+		istio_networking.NewConfigGenerator(args.Plugins),
+		s.ServiceController, s.kubeRegistry, s.configController)
+	s.EnvoyXdsServer.InitDebug(s.mux, s.ServiceController)
+	if s.kubeRegistry != nil {
+		// kubeRegistry may use the environment for push status reporting.
+		// TODO: maybe all registries should have this as an optional field ?
+		s.kubeRegistry.Env = environment
+		s.kubeRegistry.InitNetworkLookup(s.meshNetworks)
+		s.kubeRegistry.XDSUpdater = s.EnvoyXdsServer
+	}
+
+	// Implement EnvoyXdsServer grace shutdown
+	s.addStartFunc(func(stop &lt;-chan struct{}) error {
+		s.EnvoyXdsServer.Start(stop)
+		return nil
+	})
+
+	// create grpc/http server
+	s.initGrpcServer(args.KeepaliveOptions)
+	s.httpServer = &amp;http.Server{
+		Addr:    args.DiscoveryOptions.HTTPAddr,
+		Handler: s.mux,
+	}
+
+	......
+
+	return nil
+}
+</code></pre><p>我们注意到，其会调用envoyv2.NewDiscoveryServer创建出EnvoyXdsServer，继续看：</p>
+<pre><code>// NewDiscoveryServer creates DiscoveryServer that sources data from Pilot's internal mesh data structures
+func NewDiscoveryServer(
+	env *model.Environment,
+	generator core.ConfigGenerator,
+	ctl model.Controller,
+	kubeController *controller.Controller,
+	configCache model.ConfigStoreCache) *DiscoveryServer {
+	out := &amp;DiscoveryServer{
+		Env:                     env,
+		ConfigGenerator:         generator,
+		ConfigController:        configCache,
+		KubeController:          kubeController,
+		EndpointShardsByService: map[string]map[string]*EndpointShards{},
+		WorkloadsByID:           map[string]*Workload{},
+		concurrentPushLimit:     make(chan struct{}, features.PushThrottle),
+		pushChannel:             make(chan *model.PushRequest, 10),
+		pushQueue:               NewPushQueue(),
+	}
+
+	// Flush cached discovery responses whenever services, service
+	// instances, or routing configuration changes.
+	// 这里就新增Handler
+	serviceHandler := func(*model.Service, model.Event) { out.clearCache() }
+	if err := ctl.AppendServiceHandler(serviceHandler); err != nil {
+		return nil
+	}
+	// 这里就新增Handler
+	instanceHandler := func(*model.ServiceInstance, model.Event) { out.clearCache() }
+	if err := ctl.AppendInstanceHandler(instanceHandler); err != nil {
+		return nil
+	}
+
+	// Flush cached discovery responses when detecting jwt public key change.
+	authn_model.JwtKeyResolver.PushFunc = out.ClearCache
+
+	if configCache != nil {
+		// TODO: changes should not trigger a full recompute of LDS/RDS/CDS/EDS
+		// (especially mixerclient HTTP and quota)
+		configHandler := func(model.Config, model.Event) { out.clearCache() }
+		for _, descriptor := range model.IstioConfigTypes {
+			configCache.RegisterEventHandler(descriptor.Type, configHandler)
+		}
+	}
+
+	out.DebugConfigs = features.DebugConfigs
+
+	pushThrottle := features.PushThrottle
+
+	adsLog.Infof(&quot;Starting ADS server with pushThrottle=%d&quot;, pushThrottle)
+
+	return out
+}
+</code></pre><p>进入偷窥一下，你能看到：</p>
+<pre><code>// Flush cached discovery responses whenever services, service
+// instances, or routing configuration changes.
+// 这里就新增Handler
+serviceHandler := func(*model.Service, model.Event) { out.clearCache() }
+if err := ctl.AppendServiceHandler(serviceHandler); err != nil {
+    return nil
+}
+// 这里就新增Handler
+instanceHandler := func(*model.ServiceInstance, model.Event) { out.clearCache() }
+if err := ctl.AppendInstanceHandler(instanceHandler); err != nil {
+    return nil
+}
+</code></pre>
+<p>这样，k8s中sevice、endpoint等资源变动后会调用到上面的Handler进行资源的更新。但是资源更新只是内存数据变了，怎么通知已经连接上来的Envoy呢？我们之前说过</p>
+<pre><code>//pilot/pkg/proxy/envoy/v2/discovery.go
+// ConfigUpdate implements ConfigUpdater interface, used to request pushes.
+// It replaces the 'clear cache' from v1.
+func (s *DiscoveryServer) ConfigUpdate(req *model.PushRequest) {
+	inboundConfigUpdates.Increment()
+	s.pushChannel &lt;- req
+}
+</code></pre><p>上面这个方法，无论xDS还是Service、Endpoint，资源变动都会调用到。哪里使用到pushChannel呢？</p>
+<pre><code>func (s *DiscoveryServer) handleUpdates(stopCh &lt;-chan struct{}) {
+	debounce(s.pushChannel, stopCh, s.Push)
+}
+
+// The debounce helper function is implemented to enable mocking
+func debounce(ch chan *model.PushRequest, stopCh &lt;-chan struct{}, pushFn func(req *model.PushRequest)) {
+	var timeChan &lt;-chan time.Time
+	var startDebounce time.Time
+	var lastConfigUpdateTime time.Time
+
+	pushCounter := 0
+	debouncedEvents := 0
+
+	// Keeps track of the push requests. If updates are debounce they will be merged.
+	var req *model.PushRequest
+
+	free := true
+	freeCh := make(chan struct{}, 1)
+
+	push := func(req *model.PushRequest) {
+		pushFn(req)
+		freeCh &lt;- struct{}{}
+	}
+
+	pushWorker := func() {
+		// 时间一到，就执行这个方法
+		eventDelay := time.Since(startDebounce)
+		quietTime := time.Since(lastConfigUpdateTime)
+		// it has been too long or quiet enough
+		if eventDelay &gt;= DebounceMax || quietTime &gt;= DebounceAfter {
+			if req != nil {
+				pushCounter++
+				adsLog.Infof(&quot;Push debounce stable[%d] %d: %v since last change, %v since last push, full=%v&quot;,
+					pushCounter, debouncedEvents,
+					quietTime, eventDelay, req.Full)
+
+				free = false
+				// 数据更新最终会走到这里
+				go push(req)
+				req = nil
+				debouncedEvents = 0
+			}
+		} else {
+			timeChan = time.After(DebounceAfter - quietTime)
+		}
+	}
+
+	for {
+		select {
+		case &lt;-freeCh:
+			free = true
+			pushWorker()
+		case r := &lt;-ch:
+			// 这里的ch其实就是pushChannel
+			if !features.EnableEDSDebounce.Get() &amp;&amp; !r.Full {
+				// trigger push now, just for EDS
+				go pushFn(r)
+				continue
+			}
+
+			lastConfigUpdateTime = time.Now()
+			if debouncedEvents == 0 {
+				timeChan = time.After(DebounceAfter)
+				startDebounce = lastConfigUpdateTime
+			}
+			debouncedEvents++
+			// 数据进行合并
+			req = req.Merge(r)
+		case &lt;-timeChan:
+			if free {
+				// 时间一到，统一处理
+				pushWorker()
+			}
+		case &lt;-stopCh:
+			return
+		}
+	}
+}
+</code></pre><p>从上面可以看出，数据变更最终会走到下面的方法：</p>
+<pre><code>// Push is called to push changes on config updates using ADS. This is set in DiscoveryService.Push,
+// to avoid direct dependencies.
+func (s *DiscoveryServer) Push(req *model.PushRequest) {
+	if !req.Full {
+		req.Push = s.globalPushContext()
+		go s.AdsPushAll(versionInfo(), req)
+		return
+	}
+	// Reset the status during the push.
+	pc := s.globalPushContext()
+	if pc != nil {
+		pc.OnConfigChange()
+	}
+	// PushContext is reset after a config change. Previous status is
+	// saved.
+	t0 := time.Now()
+	push := model.NewPushContext()
+	// 重新初始化PushContext
+	err := push.InitContext(s.Env)
+	if err != nil {
+		adsLog.Errorf(&quot;XDS: Failed to update services: %v&quot;, err)
+		// We can't push if we can't read the data - stick with previous version.
+		pushContextErrors.Increment()
+		return
+	}
+
+	if err := s.updateServiceShards(push); err != nil {
+		return
+	}
+
+	s.updateMutex.Lock()
+	s.Env.PushContext = push
+	s.updateMutex.Unlock()
+
+	versionLocal := time.Now().Format(time.RFC3339) + &quot;/&quot; + strconv.FormatUint(versionNum.Load(), 10)
+	versionNum.Inc()
+	initContextTime := time.Since(t0)
+	adsLog.Debugf(&quot;InitContext %v for push took %s&quot;, versionLocal, initContextTime)
+
+	versionMutex.Lock()
+	version = versionLocal
+	versionMutex.Unlock()
+
+	req.Push = push
+	go s.AdsPushAll(versionLocal, req)
+}
+
+</code></pre><p>使用push.InitContext方法重新初始化数据，最终调用AdsPushAll推送数据给已经连接上来的Envoy.先看下push.InitContext:</p>
+<pre><code>func (ps *PushContext) InitContext(env *Environment) error {
+	ps.Mutex.Lock()
+	defer ps.Mutex.Unlock()
+	if ps.initDone {
+		return nil
+	}
+	ps.Env = env
+	var err error
+
+	// Must be initialized first
+	// as initServiceRegistry/VirtualServices/Destrules
+	// use the default export map
+	ps.initDefaultExportMaps()
+
+	if err = ps.initServiceRegistry(env); err != nil {
+		return err
+	}
+
+	if err = ps.initVirtualServices(env); err != nil {
+		return err
+	}
+
+	if err = ps.initDestinationRules(env); err != nil {
+		return err
+	}
+
+	if err = ps.initAuthorizationPolicies(env); err != nil {
+		rbacLog.Errorf(&quot;failed to initialize authorization policies: %v&quot;, err)
+		return err
+	}
+
+	if err = ps.initEnvoyFilters(env); err != nil {
+		return err
+	}
+
+	if err = ps.initGateways(env); err != nil {
+		return err
+	}
+
+	// Must be initialized in the end
+	if err = ps.initSidecarScopes(env); err != nil {
+		return err
+	}
+
+	ps.initDone = true
+	return nil
+}
+</code></pre><p>从上面的代码可以看出，PushContext缓存了所有数据，并直接跟XdsConn打交道。具体怎么缓存数据可以查看下具体的方法。</p>
+<pre><code>func (s *DiscoveryServer) AdsPushAll(version string, req *model.PushRequest) {
+	if !req.Full {
+		s.edsIncremental(version, req.Push, req)
+		return
+	}
+
+	adsLog.Infof(&quot;XDS: Pushing:%s Services:%d ConnectedEndpoints:%d&quot;,
+		version, len(req.Push.Services(nil)), adsClientCount())
+	monServices.Record(float64(len(req.Push.Services(nil))))
+
+	t0 := time.Now()
+
+	// First update all cluster load assignments. This is computed for each cluster once per config change
+	// instead of once per endpoint.
+	edsClusterMutex.Lock()
+	// Create a temp map to avoid locking the add/remove
+	cMap := make(map[string]*EdsCluster, len(edsClusters))
+	for k, v := range edsClusters {
+		cMap[k] = v
+	}
+	edsClusterMutex.Unlock()
+
+	// UpdateCluster updates the cluster with a mutex, this code is safe ( but computing
+	// the update may be duplicated if multiple goroutines compute at the same time).
+	// In general this code is called from the 'event' callback that is throttled.
+	for clusterName, edsCluster := range cMap {
+		if err := s.updateCluster(req.Push, clusterName, edsCluster); err != nil {
+			adsLog.Errorf(&quot;updateCluster failed with clusterName %s&quot;, clusterName)
+			totalXDSInternalErrors.Increment()
+		}
+	}
+	adsLog.Infof(&quot;Cluster init time %v %s&quot;, time.Since(t0), version)
+	req.EdsUpdates = nil
+	s.startPush(req)
+}
+
+// Send a signal to all connections, with a push event.
+func (s *DiscoveryServer) startPush(req *model.PushRequest) {
+
+	// Push config changes, iterating over connected envoys. This cover ADS and EDS(0.7), both share
+	// the same connection table
+	adsClientsMutex.RLock()
+	// Create a temp map to avoid locking the add/remove
+	pending := []*XdsConnection{}
+	for _, v := range adsClients {
+		pending = append(pending, v)
+	}
+	adsClientsMutex.RUnlock()
+
+	currentlyPending := s.pushQueue.Pending()
+	if currentlyPending != 0 {
+		adsLog.Infof(&quot;Starting new push while %v were still pending&quot;, currentlyPending)
+	}
+	req.Start = time.Now()
+	for _, p := range pending {
+		s.pushQueue.Enqueue(p, req)
+	}
+}
+</code></pre><p>最终，数据进入到DiscoveryServer的PushQueue队列，最终数据可以通过xdsConn推送出去，具体可以看下Enqueue方法。</p>
+
+                        </div>
+
+                        
+
+
+                        
+
+
+                        <div class="post-meta meta-tags">
+                            
+                            没有标签
+                            
+                        </div>
+                    </article>
+                    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= ""
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+                </div>
+            </div>
+            <div id="secondary">
+    <section class="widget">
+        <form id="search" action="/search/" method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://zhengzepeng.github.io/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">分类</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">标签</h3>
+<div class="tagcloud">
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">其它</h3>
+        <ul class="widget-list">
+            <li><a href="https://zhengzepeng.github.io/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+        </div>
+    </div>
+</div>
+<footer id="footer">
+    <div class="container">
+        &copy; 2020 <a href="https://zhengzepeng.github.io/">老郑 - 个人博客 By 老郑</a>.
+        Powered by <a rel="nofollow noreferer noopener" href="https://gohugo.io" target="_blank">Hugo</a>.
+        <a href="https://www.flysnow.org/" target="_blank">Theme</a> based on <a href="https://github.com/rujews/maupassant-hugo" target="_blank">maupassant</a>.
+        
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        
+        (function () {
+            $("pre code").parent().addClass("line-numbers")
+        }());
+
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script type="text/javascript" src="/js/prism.js" async="true"></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script>
+
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src="/js/totop.js?v=0.0.0" async=""></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+<script type="text/javascript">
+(function(){
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	if (!Prism.plugins.toolbar) {
+		console.warn('Copy to Clipboard plugin loaded before Toolbar plugin.');
+
+		return;
+	}
+
+	var ClipboardJS = window.ClipboardJS || undefined;
+
+	if (!ClipboardJS && typeof require === 'function') {
+		ClipboardJS = require('clipboard');
+	}
+
+	var callbacks = [];
+
+	if (!ClipboardJS) {
+		var script = document.createElement('script');
+		var head = document.querySelector('head');
+
+		script.onload = function() {
+			ClipboardJS = window.ClipboardJS;
+
+			if (ClipboardJS) {
+				while (callbacks.length) {
+					callbacks.pop()();
+				}
+			}
+		};
+
+		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js';
+		head.appendChild(script);
+	}
+
+	Prism.plugins.toolbar.registerButton('copy-to-clipboard', function (env) {
+		var linkCopy = document.createElement('button');
+		linkCopy.textContent = '复制代码';
+
+		if (!ClipboardJS) {
+			callbacks.push(registerClipboard);
+		} else {
+			registerClipboard();
+		}
+
+		return linkCopy;
+
+		function registerClipboard() {
+			var clip = new ClipboardJS(linkCopy, {
+				'text': function () {
+					return env.code;
+				}
+			});
+
+			clip.on('success', function() {
+				linkCopy.textContent = '复制成功!';
+
+				resetText();
+			});
+			clip.on('error', function () {
+				linkCopy.textContent = '按 Ctrl+C 复制';
+
+				resetText();
+			});
+		}
+
+		function resetText() {
+			setTimeout(function () {
+				linkCopy.textContent = '复制代码';
+			}, 5000);
+		}
+	});
+})();
+
+</script>
+</body>
+</html>
