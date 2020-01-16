@@ -133,7 +133,8 @@ drwxr-xr-x 2 root root  113 12月 31 04:07 manifests
 drwxr-xr-x 3 root root 4096 9月   5 22:43 pki
 -rw------- 1 root root 5438 9月   5 22:43 scheduler.conf
 [root@master kubernetes]# 
-</code></pre></li>
+</code></pre><p>/etc/kubernetes/admin.conf就是需要使用到的配置文件，可以拷贝到本地即可。</p>
+</li>
 <li>
 <p>secureGrpcAddr</p>
 <p>从其名称就知道使用安全加密的方式开启端口提供服务，内部会加载各种各样的证书，如果你有这些证书就忽略这步，没有的话，而且这个配置不设置为空，那么启动的时候就会报错：</p>
