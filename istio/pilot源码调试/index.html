@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+
+    <meta charset="utf-8">
+    <meta name="generator" content="Hugo 0.60.1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Pilot源码调试 | 老郑 - 个人博客</title>
+    <meta property="og:title" content="Pilot源码调试 - 老郑 - 个人博客">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content="2020-01-16T14:56:20&#43;08:00">
+        
+        
+    <meta property="article:modified_time" content="2020-01-16T14:56:20&#43;08:00">
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Pilot源码调试">
+        
+    <meta name="author" content="老郑">
+    <meta property="og:url" content="https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E8%B0%83%E8%AF%95/">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+
+    <link rel="stylesheet" href="/css/normalize.css">
+    
+        <link rel="stylesheet" href="/css/prism.css">
+    
+    <link rel="stylesheet" href="/css/style.css">
+    <script type="text/javascript" src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+
+
+    
+    
+</head>
+
+<body>
+<header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://zhengzepeng.github.io/">
+                        老郑 - 个人博客
+                    </a>
+                
+                <p class="description">看书,写代码</p>
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="" href="https://zhengzepeng.github.io/">首页</a>
+                    
+                    <a  href="https://zhengzepeng.github.io/archives/" title="归档">归档</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+
+<div id="body">
+        
+        
+    <div class="container">
+        <div class="col-group">
+
+            <div class="col-8" id="main">
+                <div class="res-cons">
+                    <article class="post">
+                        <header>
+                            <h1 class="post-title">Pilot源码调试</h1>
+                        </header>
+                        <date class="post-meta meta-date">
+                            2020年1月16日
+                        </date>
+                        
+                        
+                        <div class="post-meta">
+                            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span> 阅读</span></span>
+                        </div>
+                        
+                        
+                        <div class="post-content">
+                            <p>本人使用的是vscode，下面介绍怎么用vscode来调试pilot的代码。</p>
+<p>Pilot需要连接到apiserver获取service/endpoint等资源，也需要连接到Galley上获取各种配置，本人刚开始debug的时候忽略了配置到Galley的地址，导致一直连接不上。</p>
+<h3 id="launchjson">launch.json</h3>
+<p>使用vscode进行调试需要定义launch.json配置文件，下面是我进行Pilot调试时的配置文件：</p>
+<pre><code>{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    &quot;version&quot;: &quot;0.2.0&quot;,
+    &quot;configurations&quot;: [
+    		{
+                &quot;name&quot;: &quot;Launch&quot;,
+                &quot;type&quot;: &quot;go&quot;,
+                &quot;request&quot;: &quot;launch&quot;,
+                &quot;mode&quot;: &quot;auto&quot;,
+                &quot;program&quot;: &quot;/home/zhengzepeng/go/src/istio.io/istio/pilot/cmd/pilot-discovery/main.go&quot;,
+                &quot;env&quot;: {},
+                &quot;args&quot;: [
+                    &quot;discovery&quot;,
+                    &quot;--httpAddr&quot;,
+                    &quot;:15007&quot;,
+                    &quot;--kubeconfig&quot;,
+                    &quot;/home/zhengzepeng/.kube/config&quot;,
+                    &quot;--secureGrpcAddr&quot;,
+                    &quot;&quot;,
+                    &quot;--meshConfig&quot;,
+                    &quot;/home/zhengzepeng/tech/istio/config/meshConfig&quot;
+                ]
+            }
+      ]
+}
+</code></pre><p>下面有几个点需要注意下：</p>
+<ol>
+<li>
+<p>kubeconfig</p>
+<p>使用kubectl连接到apiserver请求数据时，kubectl也需要加载一个配置文件，用于建立和apiserver的连接，同理这里使用到的配置文件的作用也是让Pilot能连接到apiserver.</p>
+<p>最快获取这个配置文件的方式是到k8s master节点上拷贝文件下来：</p>
+<pre><code>[root@master kubernetes]# pwd
+/etc/kubernetes
+[root@master kubernetes]# ll
+总用量 36
+-rw------- 1 root root 5454 9月   5 22:43 admin.conf
+-rw------- 1 root root 5486 9月   5 22:43 controller-manager.conf
+-rw------- 1 root root 5458 9月   5 22:43 kubelet.conf
+drwxr-xr-x 2 root root  113 12月 31 04:07 manifests
+drwxr-xr-x 3 root root 4096 9月   5 22:43 pki
+-rw------- 1 root root 5438 9月   5 22:43 scheduler.conf
+[root@master kubernetes]# 
+</code></pre></li>
+<li>
+<p>secureGrpcAddr</p>
+<p>从其名称就知道使用安全加密的方式开启端口提供服务，内部会加载各种各样的证书，如果你有这些证书就忽略这步，没有的话，而且这个配置不设置为空，那么启动的时候就会报错：</p>
+<pre><code>Error: failed to create discovery service: discovery service: secure grpc server: open /etc/certs/cert-chain.pem: no such file or directory
+2020-01-16T07:08:00.850402Z	error	failed to create discovery service: discovery service: secure grpc server: open /etc/certs/cert-chain.pem: no such file or directory
+</code></pre><p>如果仅仅是debug，建议这个直接设置为空，即不开启这样的端口进行监听。</p>
+</li>
+<li>
+<p>meshConfig</p>
+<p>这个指定的是Pilot使用过程中需要用到的网格的配置，这个我们关注点在于如何配置Galley的地址，这个配置下的configSources其实配置的就是Galley的地址，本人虚拟机下的Galley已经用NodePort的方式开放出来了，如下：</p>
+<p><img src="../pilot_debug.png" alt="pilot_debug"></p>
+</li>
+</ol>
+<p>虚拟机上的master节点的ip为192.168.99.200，所以Galley的地址为192.168.99.200:31448，下面就展示下本人的meshConfig配置文件（其实就改了configSources而已）</p>
+<pre><code>disablePolicyChecks: false
+reportBatchMaxEntries: 100
+reportBatchMaxTime: 1s
+enableTracing: true
+accessLogFile: &quot;/dev/stdout&quot;
+accessLogFormat: &quot;&quot;
+accessLogEncoding: 'TEXT'
+
+enableEnvoyAccessLogService: false
+mixerCheckServer: istio-policy.istio-system.svc.cluster.local:9091
+mixerReportServer: istio-telemetry.istio-system.svc.cluster.local:9091
+policyCheckFailOpen: false
+ingressService: istio-ingressgateway
+connectTimeout: 10s
+protocolDetectionTimeout: 100ms
+dnsRefreshRate: 300s
+sdsUdsPath: &quot;&quot;
+trustDomain: &quot;&quot;
+outboundTrafficPolicy:
+  mode: ALLOW_ANY
+localityLbSetting:
+  enabled: true
+rootNamespace: istio-system
+configSources:
+- address: 192.168.99.200:31448
+
+defaultConfig:
+  connectTimeout: 10s
+  configPath: &quot;/etc/istio/proxy&quot;
+  binaryPath: &quot;/usr/local/bin/envoy&quot;
+  serviceCluster: istio-proxy
+  drainDuration: 45s
+  parentShutdownDuration: 1m0s
+  proxyAdminPort: 15000
+  concurrency: 2
+  tracing:
+    zipkin:
+      address: zipkin.istio-system:9411
+  controlPlaneAuthPolicy: NONE
+  discoveryAddress: istio-pilot.istio-system:15010
+
+</code></pre><p>经过上面的配置之后，就可以开始Pilot的调试了，效果如下：</p>
+<p><img src="../pilot_debug_vscode.png" alt="pilot_debug_vscode"></p>
+
+                        </div>
+
+                        
+
+
+                        
+
+
+                        <div class="post-meta meta-tags">
+                            
+                            没有标签
+                            
+                        </div>
+                    </article>
+                    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= ""
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+                </div>
+            </div>
+            <div id="secondary">
+    <section class="widget">
+        <form id="search" action="/search/" method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://zhengzepeng.github.io/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">分类</h3>
+<ul class="widget-list">
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">标签</h3>
+<div class="tagcloud">
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">其它</h3>
+        <ul class="widget-list">
+            <li><a href="https://zhengzepeng.github.io/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+        </div>
+    </div>
+</div>
+<footer id="footer">
+    <div class="container">
+        &copy; 2020 <a href="https://zhengzepeng.github.io/">老郑 - 个人博客 By 老郑</a>.
+        Powered by <a rel="nofollow noreferer noopener" href="https://gohugo.io" target="_blank">Hugo</a>.
+        <a href="https://www.flysnow.org/" target="_blank">Theme</a> based on <a href="https://github.com/rujews/maupassant-hugo" target="_blank">maupassant</a>.
+        
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        
+        (function () {
+            $("pre code").parent().addClass("line-numbers")
+        }());
+
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script type="text/javascript" src="/js/prism.js" async="true"></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script>
+
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src="/js/totop.js?v=0.0.0" async=""></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+<script type="text/javascript">
+(function(){
+	if (typeof self === 'undefined' || !self.Prism || !self.document) {
+		return;
+	}
+
+	if (!Prism.plugins.toolbar) {
+		console.warn('Copy to Clipboard plugin loaded before Toolbar plugin.');
+
+		return;
+	}
+
+	var ClipboardJS = window.ClipboardJS || undefined;
+
+	if (!ClipboardJS && typeof require === 'function') {
+		ClipboardJS = require('clipboard');
+	}
+
+	var callbacks = [];
+
+	if (!ClipboardJS) {
+		var script = document.createElement('script');
+		var head = document.querySelector('head');
+
+		script.onload = function() {
+			ClipboardJS = window.ClipboardJS;
+
+			if (ClipboardJS) {
+				while (callbacks.length) {
+					callbacks.pop()();
+				}
+			}
+		};
+
+		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js';
+		head.appendChild(script);
+	}
+
+	Prism.plugins.toolbar.registerButton('copy-to-clipboard', function (env) {
+		var linkCopy = document.createElement('button');
+		linkCopy.textContent = '复制代码';
+
+		if (!ClipboardJS) {
+			callbacks.push(registerClipboard);
+		} else {
+			registerClipboard();
+		}
+
+		return linkCopy;
+
+		function registerClipboard() {
+			var clip = new ClipboardJS(linkCopy, {
+				'text': function () {
+					return env.code;
+				}
+			});
+
+			clip.on('success', function() {
+				linkCopy.textContent = '复制成功!';
+
+				resetText();
+			});
+			clip.on('error', function () {
+				linkCopy.textContent = '按 Ctrl+C 复制';
+
+				resetText();
+			});
+		}
+
+		function resetText() {
+			setTimeout(function () {
+				linkCopy.textContent = '复制代码';
+			}, 5000);
+		}
+	});
+})();
+
+</script>
+</body>
+</html>

@@ -6,10 +6,19 @@
     <description>Recent content in Istios on 老郑 - 个人博客</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>zh-cn</language>
-    <lastBuildDate>Wed, 15 Jan 2020 15:54:56 +0800</lastBuildDate>
+    <lastBuildDate>Thu, 16 Jan 2020 14:56:20 +0800</lastBuildDate>
     
 	<atom:link href="https://zhengzepeng.github.io/istio/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>Pilot源码调试</title>
+      <link>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E8%B0%83%E8%AF%95/</link>
+      <pubDate>Thu, 16 Jan 2020 14:56:20 +0800</pubDate>
+      
+      <guid>https://zhengzepeng.github.io/istio/pilot%E6%BA%90%E7%A0%81%E8%B0%83%E8%AF%95/</guid>
+      <description>本人使用的是vscode，下面介绍怎么用vscode来调试pilot的代码。 Pilot需要连接到apiserver获取service/endpoint等资源，也需要连接到Galley上获取各种配置，本人刚开始debug的时候忽略了配置到Galley的地址，导致一直连接不上。 launch.json 使用</description>
+    </item>
     
     <item>
       <title>Pilot源码阅读</title>
